@@ -1,0 +1,9 @@
+__pycache__/
+*.py[cod]
+*.so
+dist/
+.venv*/
+.coverage
+.pytest_cache/
+.ruff_cache/
+src/welt_io/_version.py

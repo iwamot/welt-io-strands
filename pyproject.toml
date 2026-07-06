@@ -1,0 +1,99 @@
+[project]
+name = "welt-io"
+dynamic = ["version"]
+description = "Agent-side adapters for Welt's wire contract"
+readme = "README.md"
+requires-python = ">=3.12"
+license = "MIT"
+authors = [{ name = "Takashi Iwamoto" }]
+keywords = ["welt", "slack", "agentcore", "bedrock", "strands"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Software Development",
+    "Typing :: Typed",
+]
+dependencies = []
+
+[project.urls]
+Repository = "https://github.com/iwamot/welt-io"
+Issues = "https://github.com/iwamot/welt-io/issues"
+
+[project.optional-dependencies]
+dev = [
+    "pip-licenses==5.5.5",
+    "pytest==9.0.3",
+    "pytest-cov==7.1.0",
+]
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/welt_io/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/welt_io"]
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "/.codecov.yml",
+    "/.github",
+    "/compatibility.sh",
+    "/mise.toml",
+    "/uv.lock",
+    "/validate.sh",
+]
+
+[tool.uv]
+exclude-newer = "1 day"
+
+[tool.ruff]
+include = ["*.py", "src/**/*.py", "tests/**/*.py"]
+
+[tool.ruff.lint]
+# Reference: https://pydevtools.com/handbook/how-to/how-to-configure-recommended-ruff-defaults/
+extend-select = [
+    "F",    # Pyflakes rules
+    "W",    # PyCodeStyle warnings
+    # "E",    # PyCodeStyle errors
+    "I",    # Sort imports properly
+    "UP",   # Warn if certain things can changed due to newer Python versions
+    "C4",   # Catch incorrect use of comprehensions, dict, list, etc
+    "FA",   # Enforce from __future__ import annotations
+    "ISC",  # Good use of string concatenation
+    "ICN",  # Use common import conventions
+    "RET",  # Good return practices
+    # "SIM",  # Common simplification rules
+    "TID",  # Some good import practices
+    # "TC",   # Enforce importing certain types in a TYPE_CHECKING block
+    "PTH",  # Use pathlib instead of os.path
+    "TD",   # Be diligent with TODO comments
+    # "NPY",  # Some numpy-specific things
+    # Not in the reference URL
+    "S",    # flake8-bandit (security)
+]
+ignore = [
+    "S101",  # Allow assert in tests (pytest standard practice)
+]
+
+[tool.ty.src]
+include = ["src", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.coverage.run]
+source = ["welt_io"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
