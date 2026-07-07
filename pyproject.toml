@@ -3,7 +3,9 @@ name = "welt-io"
 dynamic = ["version"]
 description = "Agent-side adapters for Welt's wire contract"
 readme = "README.md"
-requires-python = ">=3.12"
+# Floor matches the AgentCore CLI's generated agent projects (requires-python
+# >= 3.10), so `uv add welt-io` resolves there without edits.
+requires-python = ">=3.10"
 license = "MIT"
 authors = [{ name = "Takashi Iwamoto" }]
 keywords = ["welt", "slack", "agentcore", "bedrock", "strands"]
@@ -11,6 +13,8 @@ classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: 3.14",
