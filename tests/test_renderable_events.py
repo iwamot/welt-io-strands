@@ -1,7 +1,11 @@
 import asyncio
+import base64
 from collections.abc import AsyncIterator
 
 from welt_io import renderable_events
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\n"
+PNG_BASE64 = base64.b64encode(PNG_BYTES).decode("ascii")
 
 
 def rendered(events: list) -> list[dict]:
@@ -104,6 +108,166 @@ def test_non_dict_tool_result_is_skipped() -> None:
     events = [{"message": {"role": "user", "content": [{"toolResult": "not a dict"}]}}]
 
     assert rendered(events) == []
+
+
+def test_tool_result_image_becomes_a_file_event_after_the_tool_result() -> None:
+    events = [
+        {
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "id-1",
+                            "status": "success",
+                            "content": [
+                                {"text": "chart rendered"},
+                                {
+                                    "image": {
+                                        "format": "png",
+                                        "source": {"bytes": PNG_BYTES},
+                                    }
+                                },
+                            ],
+                        }
+                    }
+                ],
+            }
+        }
+    ]
+
+    assert rendered(events) == [
+        {"tool_result": {"toolUseId": "id-1", "status": "success"}},
+        {"file": {"name": "image.png", "bytes": PNG_BASE64}},
+    ]
+
+
+def test_tool_result_document_file_is_named_from_its_name_and_format() -> None:
+    events = [
+        {
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "id-1",
+                            "status": "success",
+                            "content": [
+                                {
+                                    "document": {
+                                        "format": "pdf",
+                                        "name": "report",
+                                        "source": {"bytes": b"%PDF-"},
+                                    }
+                                }
+                            ],
+                        }
+                    }
+                ],
+            }
+        }
+    ]
+
+    assert rendered(events) == [
+        {"tool_result": {"toolUseId": "id-1", "status": "success"}},
+        {
+            "file": {
+                "name": "report.pdf",
+                "bytes": base64.b64encode(b"%PDF-").decode("ascii"),
+            }
+        },
+    ]
+
+
+def test_assistant_message_image_becomes_a_file_event() -> None:
+    events = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"text": "here you go"},
+                    {"image": {"format": "png", "source": {"bytes": PNG_BYTES}}},
+                ],
+            }
+        }
+    ]
+
+    assert rendered(events) == [{"file": {"name": "image.png", "bytes": PNG_BASE64}}]
+
+
+def test_three_gp_format_maps_to_3gp_extension() -> None:
+    events = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"video": {"format": "three_gp", "source": {"bytes": b"\x00"}}}
+                ],
+            }
+        }
+    ]
+
+    assert rendered(events) == [
+        {"file": {"name": "video.3gp", "bytes": base64.b64encode(b"\x00").decode()}}
+    ]
+
+
+def test_file_block_without_format_gets_no_extension() -> None:
+    events = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": [{"image": {"source": {"bytes": PNG_BYTES}}}],
+            }
+        }
+    ]
+
+    assert rendered(events) == [{"file": {"name": "image", "bytes": PNG_BASE64}}]
+
+
+def test_file_block_without_raw_bytes_yields_nothing() -> None:
+    events = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"image": {"format": "png", "source": {"bytes": "not raw bytes"}}},
+                    {"image": {"format": "png", "source": "not a dict"}},
+                    {
+                        "video": {
+                            "format": "mp4",
+                            "source": {"s3Location": {"uri": "s3://bucket/key"}},
+                        }
+                    },
+                ],
+            }
+        }
+    ]
+
+    assert rendered(events) == []
+
+
+def test_non_dict_tool_result_content_block_is_skipped() -> None:
+    events = [
+        {
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "id-1",
+                            "status": "success",
+                            "content": ["not a dict"],
+                        }
+                    }
+                ],
+            }
+        }
+    ]
+
+    assert rendered(events) == [
+        {"tool_result": {"toolUseId": "id-1", "status": "success"}}
+    ]
 
 
 def test_unrenderable_events_are_dropped() -> None:
