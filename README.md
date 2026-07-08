@@ -5,11 +5,6 @@
 
 Agent-side adapters for [Welt](https://github.com/iwamot/welt)'s wire contract.
 
-The wire between Welt and your agent is JSON, and plain Strands values do not fit it in either direction:
-
-- **Inbound**, JSON cannot carry raw bytes, so Welt base64-encodes the `bytes` slot of the Converse image/document/video blocks it builds from Slack uploads. `decode_file_blocks` restores them before Strands (Bedrock Converse) sees the messages; without uploads it is a no-op.
-- **Outbound**, raw `stream_async` events carry values that are not JSON-serializable (the Agent itself, UUIDs, traces), which the AgentCore Runtime SDK would degrade to a plain string on the SSE wire. `renderable_events` reduces the stream to the events Welt renders: text chunks (`data`), tool-use starts (`current_tool_use`), and tool completions (`tool_result`, slimmed to the toolUseId and status so tool output stays off the wire).
-
 ## Install
 
 ```bash
@@ -41,6 +36,18 @@ async def invoke(payload: dict) -> AsyncIterator[dict]:
 if __name__ == "__main__":
     app.run()
 ```
+
+## Adapters
+
+The wire between Welt and your agent is JSON, and plain Strands values do not fit it in either direction.
+
+### Inbound
+
+`decode_file_blocks(messages)` restores the base64-encoded file bytes in Welt's Converse-shaped messages (built from Slack uploads) back to the raw bytes Strands expects, in place. Without uploads it is a no-op.
+
+### Outbound
+
+`renderable_events(events)` reduces raw `stream_async` events — not JSON-serializable as-is — to the events Welt renders: text chunks (`data`), tool-use indicators (`current_tool_use` / `tool_result`, slimmed so text tool output stays off the wire), and generated files (`file`, a filename plus base64 bytes for each image/document/video block a tool or the model produces, which Welt uploads to the Slack thread).
 
 ## License
 

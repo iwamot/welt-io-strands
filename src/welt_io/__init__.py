@@ -8,9 +8,10 @@ fit it in either direction:
   uploads. `decode_file_blocks` restores them before Strands (Bedrock
   Converse) sees the messages; without uploads it is a no-op.
 - Outbound, raw `stream_async` events carry values that are not
-  JSON-serializable (the Agent itself, UUIDs, traces), which the AgentCore
-  Runtime SDK would degrade to a plain string on the SSE wire.
-  `renderable_events` reduces the stream to the events Welt renders.
+  JSON-serializable (the Agent itself, UUIDs, traces, raw file bytes), which
+  the AgentCore Runtime SDK would degrade to a plain string on the SSE wire.
+  `renderable_events` reduces the stream to the events Welt renders, with
+  generated files base64-encoded — the inbound encoding in reverse.
 """
 
 import base64
@@ -61,9 +62,12 @@ async def renderable_events(events: AsyncIterator[dict]) -> AsyncIterator[dict]:
 
     Yields:
         dict: A `data` event per text chunk, a `current_tool_use` event per
-            tool-use update, and a `tool_result` event — slimmed to the
-            toolUseId and status, so tool output (arbitrarily large, possibly
-            raw bytes) stays off the wire — per completed tool.
+            tool-use update, and per completed tool a `tool_result` event —
+            slimmed to the toolUseId and status, so text tool output stays
+            off the wire — followed by a `file` event (filename plus base64
+            bytes, which Welt uploads to the Slack thread) per image,
+            document, or video block the tool returned. Such blocks in the
+            assistant message itself become `file` events the same way.
     """
     async for event in events:
         if "data" in event:
@@ -71,40 +75,109 @@ async def renderable_events(events: AsyncIterator[dict]) -> AsyncIterator[dict]:
         elif "current_tool_use" in event:
             yield {"current_tool_use": event["current_tool_use"]}
         elif "message" in event:
-            for tool_result in _tool_results(event["message"]):
-                yield {"tool_result": tool_result}
+            for rendered in _message_events(event["message"]):
+                yield rendered
 
 
-def _tool_results(message: object) -> list[dict]:
+def _message_events(message: object) -> list[dict]:
     """
-    Extract slimmed toolResult entries from a Strands message event.
+    Extract renderable events from a Strands message event.
 
     Strands adds tool results to the conversation as a message whose content
-    blocks each carry a `toolResult`; model messages carry none, so they
-    yield an empty list.
+    blocks each carry a `toolResult`; a `tool_result` entry is slimmed to the
+    toolUseId and status, followed by a `file` event per image/document/video
+    block the tool returned. Model messages carry text (nothing to extract —
+    it already streamed as `data` events) and, for models that generate files,
+    image/document/video blocks, which become `file` events too.
 
     Args:
         message (object): The `message` value of a stream event.
 
     Returns:
-        list[dict]: One `{"toolUseId", "status"}` entry per tool result.
+        list[dict]: The `tool_result` and `file` events, in content order.
     """
     if not isinstance(message, dict):
         return []
     content = message.get("content")
     if not isinstance(content, list):
         return []
-    results: list[dict] = []
+    events: list[dict] = []
     for block in content:
         if not isinstance(block, dict):
             continue
         tool_result = block.get("toolResult")
-        if not isinstance(tool_result, dict):
+        if isinstance(tool_result, dict):
+            events.append(
+                {
+                    "tool_result": {
+                        "toolUseId": tool_result.get("toolUseId"),
+                        "status": tool_result.get("status"),
+                    }
+                }
+            )
+            result_content = tool_result.get("content")
+            if isinstance(result_content, list):
+                events.extend(
+                    file_event
+                    for result_block in result_content
+                    if isinstance(result_block, dict)
+                    and (file_event := _file_event(result_block)) is not None
+                )
+        else:
+            file_event = _file_event(block)
+            if file_event is not None:
+                events.append(file_event)
+    return events
+
+
+# Converse format tokens double as filename extensions, except this one.
+_EXTENSION_BY_FORMAT = {"three_gp": "3gp"}
+
+
+def _file_event(block: dict) -> dict | None:
+    """
+    Build a `file` event from a content block carrying raw file bytes.
+
+    Args:
+        block (dict): A Converse content block (from a toolResult or an
+            assistant message).
+
+    Returns:
+        dict | None: The `file` event (name plus base64 bytes), or None for
+            blocks without raw image/document/video bytes.
+    """
+    for kind in ("image", "document", "video"):
+        media = block.get(kind)
+        if not isinstance(media, dict):
             continue
-        results.append(
-            {
-                "toolUseId": tool_result.get("toolUseId"),
-                "status": tool_result.get("status"),
+        source = media.get("source")
+        data = source.get("bytes") if isinstance(source, dict) else None
+        if not isinstance(data, bytes):
+            continue
+        return {
+            "file": {
+                "name": _file_name(kind, media),
+                "bytes": base64.b64encode(data).decode("ascii"),
             }
-        )
-    return results
+        }
+    return None
+
+
+def _file_name(kind: str, media: dict) -> str:
+    """
+    Synthesize an upload filename for a file block.
+
+    Args:
+        kind (str): The block kind (image, document, or video).
+        media (dict): The block's value, whose optional `name` (document
+            blocks) and `format` provide the filename parts.
+
+    Returns:
+        str: The block's name (or its kind) plus the format as extension.
+    """
+    name = media.get("name")
+    base = name if isinstance(name, str) and name else kind
+    file_format = media.get("format")
+    if not isinstance(file_format, str) or not file_format:
+        return base
+    return f"{base}.{_EXTENSION_BY_FORMAT.get(file_format, file_format)}"
