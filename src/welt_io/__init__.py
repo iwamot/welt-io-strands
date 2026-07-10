@@ -12,6 +12,8 @@ fit it in either direction:
   the AgentCore Runtime SDK would degrade to a plain string on the SSE wire.
   `renderable_events` reduces the stream to the events Welt renders, with
   generated files base64-encoded — the inbound encoding in reverse.
+  `file_event` builds the same `file` event from a name and raw bytes, so
+  agents can attach files of their own alongside the reduced stream.
 """
 
 import base64
@@ -22,7 +24,7 @@ try:
 except ImportError:
     __version__ = "0.0.0+unknown"
 
-__all__ = ["decode_file_blocks", "renderable_events"]
+__all__ = ["decode_file_blocks", "file_event", "renderable_events"]
 
 
 def decode_file_blocks(messages: list) -> None:
@@ -51,6 +53,24 @@ def decode_file_blocks(messages: list) -> None:
                 source = media.get("source")
                 if isinstance(source, dict) and isinstance(source.get("bytes"), str):
                     source["bytes"] = base64.b64decode(source["bytes"])
+
+
+def file_event(name: str, data: bytes) -> dict:
+    """
+    Build a `file` wire event, which Welt uploads to the Slack thread.
+
+    `renderable_events` emits these for the files a tool or the model
+    generates; this builds the same event from arbitrary bytes, for agents
+    that attach files of their own alongside the reduced stream.
+
+    Args:
+        name (str): The upload filename, extension included.
+        data (bytes): The raw file bytes.
+
+    Returns:
+        dict: The `file` event (name plus base64 bytes).
+    """
+    return {"file": {"name": name, "bytes": base64.b64encode(data).decode("ascii")}}
 
 
 async def renderable_events(events: AsyncIterator[dict]) -> AsyncIterator[dict]:
@@ -118,15 +138,15 @@ def _message_events(message: object) -> list[dict]:
             result_content = tool_result.get("content")
             if isinstance(result_content, list):
                 events.extend(
-                    file_event
+                    event
                     for result_block in result_content
                     if isinstance(result_block, dict)
-                    and (file_event := _file_event(result_block)) is not None
+                    and (event := _file_event_from_block(result_block)) is not None
                 )
         else:
-            file_event = _file_event(block)
-            if file_event is not None:
-                events.append(file_event)
+            event = _file_event_from_block(block)
+            if event is not None:
+                events.append(event)
     return events
 
 
@@ -134,7 +154,7 @@ def _message_events(message: object) -> list[dict]:
 _EXTENSION_BY_FORMAT = {"three_gp": "3gp"}
 
 
-def _file_event(block: dict) -> dict | None:
+def _file_event_from_block(block: dict) -> dict | None:
     """
     Build a `file` event from a content block carrying raw file bytes.
 
@@ -154,12 +174,7 @@ def _file_event(block: dict) -> dict | None:
         data = source.get("bytes") if isinstance(source, dict) else None
         if not isinstance(data, bytes):
             continue
-        return {
-            "file": {
-                "name": _file_name(kind, media),
-                "bytes": base64.b64encode(data).decode("ascii"),
-            }
-        }
+        return file_event(_file_name(kind, media), data)
     return None
 
 

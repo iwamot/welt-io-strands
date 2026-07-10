@@ -49,6 +49,12 @@ The wire between Welt and your agent is JSON, and plain Strands values do not fi
 
 `renderable_events(events)` reduces raw `stream_async` events — not JSON-serializable as-is — to the events Welt renders: text chunks (`data`), tool-use indicators (`current_tool_use` / `tool_result`, slimmed so text tool output stays off the wire), and generated files (`file`, a filename plus base64 bytes for each image/document/video block a tool or the model produces, which Welt uploads to the Slack thread).
 
+`file_event(name, data)` builds the same `file` event from a filename and raw bytes, for attaching arbitrary files of your own:
+
+```python
+yield file_event("report.csv", csv_bytes)
+```
+
 ## License
 
 MIT
