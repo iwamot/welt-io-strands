@@ -1,11 +1,28 @@
 import asyncio
 import base64
 from collections.abc import AsyncIterator
+from dataclasses import dataclass
 
 from welt_io import renderable_events
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n"
 PNG_BASE64 = base64.b64encode(PNG_BYTES).decode("ascii")
+
+
+@dataclass
+class FakeInterrupt:
+    """The attribute shape of a Strands Interrupt, as test data."""
+
+    id: str
+    name: str
+    reason: object = None
+
+
+@dataclass
+class FakeResult:
+    """The attribute shape of a Strands AgentResult, as test data."""
+
+    interrupts: list[FakeInterrupt] | None = None
 
 
 def rendered(events: list) -> list[dict]:
@@ -268,6 +285,63 @@ def test_non_dict_tool_result_content_block_is_skipped() -> None:
     assert rendered(events) == [
         {"tool_result": {"toolUseId": "id-1", "status": "success"}}
     ]
+
+
+def test_result_interrupt_becomes_an_interrupt_event() -> None:
+    interrupt = FakeInterrupt(id="i-1", name="deploy-approval", reason="Deploy?")
+    events = [{"result": FakeResult(interrupts=[interrupt])}]
+
+    assert rendered(events) == [
+        {"interrupt": {"id": "i-1", "name": "deploy-approval", "reason": "Deploy?"}}
+    ]
+
+
+def test_yields_one_interrupt_event_per_interrupt() -> None:
+    events = [
+        {
+            "result": FakeResult(
+                interrupts=[
+                    FakeInterrupt(id="i-1", name="approval-a", reason="A?"),
+                    FakeInterrupt(id="i-2", name="approval-b", reason="B?"),
+                ]
+            )
+        }
+    ]
+
+    assert rendered(events) == [
+        {"interrupt": {"id": "i-1", "name": "approval-a", "reason": "A?"}},
+        {"interrupt": {"id": "i-2", "name": "approval-b", "reason": "B?"}},
+    ]
+
+
+def test_interrupt_reason_is_passed_through_unmodified() -> None:
+    reason = {
+        "message": "Deploy to prod?",
+        "options": [{"value": "approve", "label": "Deploy", "style": "primary"}],
+        "extra": {"nested": [1, {"deep": True}]},
+    }
+    interrupt = FakeInterrupt(id="i-1", name="deploy-approval", reason=reason)
+    events = [{"result": FakeResult(interrupts=[interrupt])}]
+
+    rendered_reason = rendered(events)[0]["interrupt"]["reason"]
+
+    assert rendered_reason is reason
+
+
+def test_interrupt_without_reason_keeps_none() -> None:
+    events = [{"result": FakeResult(interrupts=[FakeInterrupt(id="i-1", name="n")])}]
+
+    assert rendered(events) == [
+        {"interrupt": {"id": "i-1", "name": "n", "reason": None}}
+    ]
+
+
+def test_result_without_interrupts_yields_nothing() -> None:
+    assert rendered([{"result": FakeResult(interrupts=None)}]) == []
+
+
+def test_result_with_empty_interrupts_yields_nothing() -> None:
+    assert rendered([{"result": FakeResult(interrupts=[])}]) == []
 
 
 def test_unrenderable_events_are_dropped() -> None:
