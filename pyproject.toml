@@ -27,7 +27,9 @@ dependencies = []
 Repository = "https://github.com/iwamot/welt-io"
 Issues = "https://github.com/iwamot/welt-io/issues"
 
-[project.optional-dependencies]
+# The dev group is included by `uv sync` and `uv run` by default, and —
+# unlike a dev extra — is not published in the wheel metadata.
+[dependency-groups]
 dev = [
     # examples/agent is a standalone deployable; its dependencies are
     # installed here so lint and type checks cover it against the local
