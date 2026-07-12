@@ -12,4 +12,7 @@ mise install aqua:astral-sh/uv
 export UV_PROJECT_ENVIRONMENT=".venv-compat/${UV_PYTHON:-default}"
 
 uv sync --extra dev
+# Tests import all of src, but nothing imports the example agent, so
+# byte-compile it to catch syntax incompatibilities there.
+uv run --no-sync python -m compileall -q examples
 uv run --no-sync pytest

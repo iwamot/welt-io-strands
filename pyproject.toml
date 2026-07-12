@@ -1,7 +1,7 @@
 [project]
 name = "welt-io"
 dynamic = ["version"]
-description = "Agent-side adapters for Welt's wire contract"
+description = "The Strands Agents (Python) adapter for Welt's wire contract"
 readme = "README.md"
 # Floor matches the AgentCore CLI's generated agent projects (requires-python
 # >= 3.10), so `uv add welt-io` resolves there without edits.
@@ -29,9 +29,15 @@ Issues = "https://github.com/iwamot/welt-io/issues"
 
 [project.optional-dependencies]
 dev = [
+    # examples/agent is a standalone deployable; its dependencies are
+    # installed here so lint and type checks cover it against the local
+    # library.
+    "bedrock-agentcore==1.17.0",
     "pip-licenses==5.5.5",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
+    "strands-agents==1.46.0",
+    "strands-agents-tools==0.8.3",
 ]
 
 [build-system]
@@ -52,6 +58,7 @@ exclude = [
     "/.codecov.yml",
     "/.github",
     "/compatibility.sh",
+    "/examples",
     "/mise.toml",
     "/uv.lock",
     "/validate.sh",
@@ -61,7 +68,7 @@ exclude = [
 exclude-newer = "1 day"
 
 [tool.ruff]
-include = ["*.py", "src/**/*.py", "tests/**/*.py"]
+include = ["*.py", "examples/**/*.py", "src/**/*.py", "tests/**/*.py"]
 
 [tool.ruff.lint]
 # Reference: https://pydevtools.com/handbook/how-to/how-to-configure-recommended-ruff-defaults/
@@ -90,7 +97,7 @@ ignore = [
 ]
 
 [tool.ty.src]
-include = ["src", "tests"]
+include = ["examples", "src", "tests"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
