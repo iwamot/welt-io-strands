@@ -17,19 +17,36 @@ See [`examples/agent`](examples/agent) — the smallest complete agent built on 
 
 ## API
 
-The wire between Welt and the agent is JSON, and its contract is defined by [Welt's docs](https://github.com/iwamot/welt#features) — plain Strands values do not fit it in either direction. Each function below adapts one piece:
+The wire between Welt and the agent is JSON, specified by [Welt's wire contract](https://github.com/iwamot/welt/blob/main/docs/wire.md) — plain Strands values do not fit it in either direction. Two functions adapt the inbound payload, three the outbound stream.
 
 ### Inbound
 
-`decode_file_blocks(messages)` restores the base64-encoded file bytes in Welt's Converse-shaped messages (built from Slack uploads) back to the raw bytes Strands expects, in place. Without uploads it is a no-op.
+#### `decode_file_blocks(messages)`
 
-`decode_interrupt_responses(responses)` turns Welt's resume payload — a plain mapping of interrupt id to the answer a human chose — into the `interruptResponse` items that `Agent.stream_async` resumes from.
+Restores the base64-encoded file bytes in Welt's Converse-shaped messages back to the raw bytes Strands expects, in place. Without Slack uploads it is a no-op.
+
+#### `decode_interrupt_responses(responses)`
+
+Turns Welt's resume payload — a mapping of interrupt id to the answer a human chose — into the `interruptResponse` items that `Agent.stream_async` resumes from.
 
 ### Outbound
 
-`renderable_events(events)` reduces raw `stream_async` events — not JSON-serializable as-is — to the events Welt renders: text chunks (`data`), tool-use indicators (`current_tool_use` / `tool_result`, slimmed so text tool output stays off the wire), and generated files (`file`, a filename plus base64 bytes for each image/document/video block a tool or the model produces, which Welt uploads to the Slack thread — see [Welt's Files doc](https://github.com/iwamot/welt/blob/main/docs/files.md) for size limits and rendering). A stream that stops for human input ([interrupts](https://strandsagents.com/docs/user-guide/concepts/interrupts/)) ends with one `interrupt` event per pending interrupt, which Welt renders as buttons in the Slack thread; agents that do not use interrupts see no change.
+#### `renderable_events(events)`
 
-`file_event(name, data)` builds the same `file` event from a filename and raw bytes, for attaching arbitrary files of your own:
+Reduces raw `stream_async` events — not JSON-serializable as-is — to the events Welt renders:
+
+| Strands emits | On the wire | In the Slack thread |
+|---|---|---|
+| Text deltas | `data` | The streamed reply |
+| Tool invocations and results | `current_tool_use` / `tool_result` | "Using tool" indicators (tool output stays off the wire) |
+| Image / document / video blocks a tool or the model produces | `file` | An uploaded file ([size limits](https://github.com/iwamot/welt/blob/main/docs/wire.md#limits)) |
+| Pending [interrupts](https://strandsagents.com/docs/user-guide/concepts/interrupts/) | `interrupt` | Buttons and/or a text field |
+
+A run that stops for human input ends its stream with one `interrupt` event per pending interrupt; agents that do not use interrupts see no change.
+
+#### `file_event(name, data)`
+
+Builds the same `file` event from a filename and raw bytes, for attaching arbitrary files of your own:
 
 ```python
 yield file_event("report.csv", csv_bytes)
@@ -37,7 +54,9 @@ yield file_event("report.csv", csv_bytes)
 
 Tool-generated files need no code at all — for example, strands-tools' [`generate_image`](https://github.com/strands-agents/tools/blob/main/src/strands_tools/generate_image.py) returns the image as a tool-result block, which streams into the thread by itself. The [example agent](examples/agent) includes it.
 
-`interrupt_reason(message, options=..., input=...)` builds the reason shape Welt renders as a message with the specified widgets, both specs being the wire's own shapes: buttons (`options`, one dict per button — a required `value`, an optional `label`, an optional `style` of `"primary"` or `"danger"`), a free-text field whose submitted text becomes the response (`input` — an optional `label` and `multiline`), or both — whichever answer comes first settles the question. Omitted fields keep Welt's defaults; building the shape through this helper turns a typo into an immediate `ValueError` instead of a silent fallback to Welt's default rendering:
+#### `interrupt_reason(message, options=..., input=...)`
+
+Builds the structured reason Welt renders as a message with the specified widgets — choice buttons (`options`), a free-text field (`input`), or both. The specs are [the wire's own shapes](https://github.com/iwamot/welt/blob/main/docs/wire.md#interrupt); omitted fields keep Welt's defaults, and a typo becomes an immediate `ValueError` instead of a silent fallback to Welt's default rendering:
 
 ```python
 answer = tool_context.interrupt(
@@ -53,9 +72,13 @@ answer = tool_context.interrupt(
 )
 ```
 
-[Welt's Interrupts doc](https://github.com/iwamot/welt/blob/main/docs/interrupts.md) covers the whole round trip: the reason contract, who can press, multiple interrupts, and expiry. Prefix your interrupt names (`myapp-deploy-approval`): hook-raised interrupts must be unique across the whole event, tool-raised ones within their tool, and a prefix keeps both as the agent grows.
+## Working with interrupts
 
-Strands' ready-made [`HumanInTheLoop`](https://strandsagents.com/docs/user-guide/concepts/agents/interventions/human-in-the-loop/) intervention works over Welt as-is — its string reasons render with Welt's default **Approve** / **Deny** buttons, whose `y` / `n` values its default evaluator understands. Do not pass `ask`: stdio prompts and callback evaluators have no terminal on AgentCore Runtime. For strands-tools packages that gate themselves behind a stdio consent prompt, set `BYPASS_TOOL_CONSENT=true` and let `HumanInTheLoop` do the gating over Slack instead; the strands-tools `handoff_to_user` tool is likewise stdio-bound, and a small interrupt-raising tool of your own is the replacement.
+[Welt's Interrupts doc](https://github.com/iwamot/welt/blob/main/docs/interrupts.md) covers the Slack side: how each reason renders, who can answer, multiple questions, and expiry. On the Strands side:
+
+- **Prefix your interrupt names** (`myapp-deploy-approval`). Hook-raised interrupts must be unique across the whole event, tool-raised ones within their tool — a prefix keeps both as the agent grows.
+- **Strands' ready-made [`HumanInTheLoop`](https://strandsagents.com/docs/user-guide/concepts/agents/interventions/human-in-the-loop/) intervention works over Welt as-is.** Its string reasons render with Welt's default **Approve** / **Deny** buttons, whose `y` / `n` values its default evaluator understands. Do not pass `ask`: stdio prompts and callback evaluators have no terminal on AgentCore Runtime.
+- **Route stdio consent prompts through interrupts instead.** For strands-tools packages that gate themselves behind a stdio prompt, set `BYPASS_TOOL_CONSENT=true` and let `HumanInTheLoop` do the gating over Slack. The strands-tools `handoff_to_user` tool is likewise stdio-bound; a small interrupt-raising tool of your own is the replacement.
 
 ## Supported Versions
 
