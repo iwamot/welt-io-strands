@@ -5,10 +5,10 @@ fit it in either direction:
 
 - Inbound, JSON cannot carry raw bytes, so Welt base64-encodes the `bytes`
   slot of the Converse image/document/video blocks it builds from Slack
-  uploads. `decode_file_blocks` restores them before Strands (Bedrock
-  Converse) sees the messages; without uploads it is a no-op. Welt resumes
-  an interrupted run with a plain mapping of interrupt id to the chosen
-  answer; `decode_interrupt_responses` turns it into Strands' resume input.
+  uploads. `decode_messages` restores them before Strands (Bedrock
+  Converse) sees the messages. Welt resumes an interrupted run with a
+  plain mapping of interrupt id to the chosen answer;
+  `decode_interrupt_responses` turns it into Strands' resume input.
 - Outbound, raw `stream_async` events carry values that are not
   JSON-serializable (the Agent itself, UUIDs, traces, raw file bytes), which
   the AgentCore Runtime SDK would degrade to a plain string on the SSE wire.
@@ -22,6 +22,8 @@ fit it in either direction:
 """
 
 import base64
+import copy
+import warnings
 from collections.abc import AsyncIterator, Sequence
 
 try:
@@ -32,13 +34,56 @@ except ImportError:
 __all__ = [
     "decode_file_blocks",
     "decode_interrupt_responses",
+    "decode_messages",
     "file_event",
     "interrupt_reason",
     "renderable_events",
 ]
 
 
+def decode_messages(messages: list) -> list:
+    """
+    Decode Welt's messages payload into the messages Strands consumes.
+
+    Strands (Bedrock Converse) consumes Welt's Converse-shaped messages
+    as they are, except that the image/document/video bytes arrive
+    base64-encoded — JSON cannot carry raw bytes — and Strands expects
+    them raw.
+
+    Args:
+        messages (list): The `messages` value of Welt's payload.
+
+    Returns:
+        list: A decoded copy of the messages; the input is left untouched.
+    """
+    decoded = copy.deepcopy(messages)
+    _restore_file_bytes(decoded)
+    return decoded
+
+
 def decode_file_blocks(messages: list) -> None:
+    """
+    Decode base64 image/document/video bytes back to raw bytes, in place.
+
+    Deprecated: use `decode_messages`, which returns a decoded copy
+    instead of mutating its input.
+
+    Args:
+        messages (list): The Converse-shaped messages from Welt's payload.
+
+    Returns:
+        None
+    """
+    warnings.warn(
+        "decode_file_blocks is deprecated; use decode_messages, which returns"
+        " a decoded copy instead of mutating its input",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    _restore_file_bytes(messages)
+
+
+def _restore_file_bytes(messages: list) -> None:
     """
     Decode base64 image/document/video bytes back to raw bytes, in place.
 

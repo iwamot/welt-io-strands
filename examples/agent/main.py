@@ -20,8 +20,8 @@ from strands import Agent, ToolContext, tool
 from strands_tools import current_time, generate_image
 
 from welt_io import (
-    decode_file_blocks,
     decode_interrupt_responses,
+    decode_messages,
     interrupt_reason,
     renderable_events,
 )
@@ -111,7 +111,7 @@ async def invoke(payload: dict) -> AsyncIterator[dict]:
                 "so there is nothing to reply to."
             }
             return
-        decode_file_blocks(messages)  # base64 file bytes -> raw bytes, in place
+        messages = decode_messages(messages)  # base64 file bytes -> raw bytes
         agent = Agent(
             # Any Converse model; unset falls back to the Strands default.
             model=os.environ.get("MODEL_ID"),

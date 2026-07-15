@@ -21,9 +21,9 @@ The wire between Welt and the agent is JSON, specified by [Welt's wire contract]
 
 ### Inbound
 
-#### `decode_file_blocks(messages)`
+#### `decode_messages(messages)`
 
-Restores the base64-encoded file bytes in Welt's Converse-shaped messages back to the raw bytes Strands expects, in place. Without Slack uploads it is a no-op.
+Returns a copy of Welt's Converse-shaped messages with the base64-encoded file bytes restored to the raw bytes Strands expects; the input is left untouched. Its in-place predecessor, `decode_file_blocks(messages)`, is deprecated.
 
 #### `decode_interrupt_responses(responses)`
 
