@@ -1,4 +1,4 @@
-from welt_io import decode_interrupt_responses
+from welt_io_strands import decode_interrupt_responses
 
 
 def test_each_answer_becomes_an_interrupt_response_item():

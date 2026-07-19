@@ -3,7 +3,7 @@ import base64
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
-from welt_io import renderable_events
+from welt_io_strands import renderable_events
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n"
 PNG_BASE64 = base64.b64encode(PNG_BYTES).decode("ascii")

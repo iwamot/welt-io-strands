@@ -1,6 +1,6 @@
 import base64
 
-from welt_io import decode_messages
+from welt_io_strands import decode_messages
 
 
 def encoded(raw: bytes) -> str:

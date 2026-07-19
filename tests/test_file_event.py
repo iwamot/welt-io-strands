@@ -2,7 +2,7 @@ import base64
 
 import pytest
 
-from welt_io import file_event
+from welt_io_strands import file_event
 
 
 def test_builds_a_file_event_with_base64_bytes() -> None:

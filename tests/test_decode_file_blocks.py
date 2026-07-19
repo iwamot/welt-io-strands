@@ -2,7 +2,7 @@ import base64
 
 import pytest
 
-from welt_io import decode_file_blocks
+from welt_io_strands import decode_file_blocks
 
 
 def test_warns_deprecation_and_decodes_in_place() -> None:

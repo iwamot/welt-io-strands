@@ -1,6 +1,6 @@
 import pytest
 
-from welt_io import interrupt_reason
+from welt_io_strands import interrupt_reason
 
 
 def test_builds_message_and_options() -> None:

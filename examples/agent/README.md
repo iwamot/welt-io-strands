@@ -1,6 +1,6 @@
 # Example Agent
 
-The example agent for [Welt](https://github.com/iwamot/welt)'s [Quick Start](https://github.com/iwamot/welt#quick-start): the smallest complete agent that exercises the wire in both directions through welt-io.
+The example agent for [Welt](https://github.com/iwamot/welt)'s [Quick Start](https://github.com/iwamot/welt#quick-start): the smallest complete agent that exercises the wire in both directions through welt-io-strands.
 
 ## Stack
 
@@ -9,7 +9,7 @@ The example agent for [Welt](https://github.com/iwamot/welt)'s [Quick Start](htt
 | [Bedrock AgentCore SDK](https://github.com/aws/bedrock-agentcore-sdk-python) | Serves the endpoint |
 | [Strands Agents](https://github.com/strands-agents/sdk-python) | Runs the model and the tools |
 | [Strands Agents Tools](https://github.com/strands-agents/tools) | Provides the `current_time` and `generate_image` tools |
-| welt-io | Adapts the wire to Welt |
+| welt-io-strands | Adapts the wire to Welt |
 
 ## Run Locally
 
@@ -18,9 +18,9 @@ The agent runs on your machine as-is — [Welt's Quick Start](https://github.com
 Fetch the agent and run it with [uv](https://docs.astral.sh/uv/):
 
 ```sh
-curl -O https://raw.githubusercontent.com/iwamot/welt-io/main/examples/agent/main.py
+curl -O https://raw.githubusercontent.com/iwamot/welt-io-strands/main/examples/agent/main.py
 MODEL_ID=global.anthropic.claude-sonnet-4-6 \
-  uv run --with bedrock-agentcore --with strands-agents-tools --with welt-io \
+  uv run --with bedrock-agentcore --with strands-agents-tools --with welt-io-strands \
   --with "botocore[crt]" main.py
 ```
 
@@ -36,8 +36,8 @@ Deploy with the [AgentCore CLI](https://github.com/aws/agentcore-cli):
 agentcore create --name WeltExample --framework Strands --model-provider Bedrock --memory none
 cd WeltExample
 
-curl -o app/WeltExample/main.py https://raw.githubusercontent.com/iwamot/welt-io/main/examples/agent/main.py
-uv add --project app/WeltExample welt-io strands-agents-tools
+curl -o app/WeltExample/main.py https://raw.githubusercontent.com/iwamot/welt-io-strands/main/examples/agent/main.py
+uv add --project app/WeltExample welt-io-strands strands-agents-tools
 
 agentcore deploy
 ```
@@ -47,7 +47,7 @@ The agent uses the Strands default model — currently an Anthropic Claude model
 ## Tools
 
 - [`current_time`](https://github.com/strands-agents/tools/blob/main/src/strands_tools/current_time.py) — the minimal tool: plain text streaming, nothing else. Ask "what time is it?" to see tool use in the thread.
-- [`generate_image`](https://github.com/strands-agents/tools/blob/main/src/strands_tools/generate_image.py) — returns the image as a tool-result block, which welt-io streams into the thread as a file upload by itself. Ask it to draw something.
+- [`generate_image`](https://github.com/strands-agents/tools/blob/main/src/strands_tools/generate_image.py) — returns the image as a tool-result block, which welt-io-strands streams into the thread as a file upload by itself. Ask it to draw something.
 - `sample_dangerous_action` — a pretend dangerous action (no side effects, no extra AWS permissions) that pauses for human approval: Welt renders the pause as **Approve** / **Cancel** buttons plus a free-text field in the Slack thread, and whichever answer comes first — a press, or a typed instruction — resumes the run. Ask "deploy to prod", then press a button or type something like "run the tests first". See [Welt's Interrupts doc](https://github.com/iwamot/welt/blob/main/docs/interrupts.md) for the round trip.
 
 ## Optional: file input
