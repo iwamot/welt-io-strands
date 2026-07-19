@@ -8,7 +8,7 @@ into Slack. The payload carries one of two envelopes: Converse-shaped
 answered the approval buttons of an interrupted run.
 
 This example is a standalone deployable; Welt drives it only through the
-JSON wire contract, which welt-io adapts in both directions.
+JSON wire contract, which welt-io-strands adapts in both directions.
 """
 
 import os
@@ -19,7 +19,7 @@ from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from strands import Agent, ToolContext, tool
 from strands_tools import current_time, generate_image
 
-from welt_io import (
+from welt_io_strands import (
     decode_interrupt_responses,
     decode_messages,
     interrupt_reason,

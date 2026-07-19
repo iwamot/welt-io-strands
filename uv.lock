@@ -2519,7 +2519,7 @@ wheels = [
 ]
 
 [[package]]
-name = "welt-io"
+name = "welt-io-strands"
 source = { editable = "." }
 
 [package.dev-dependencies]

@@ -1,16 +1,14 @@
-# welt-io
+# welt-io-strands
 
-[![pypi](https://img.shields.io/pypi/v/welt-io.svg)](https://pypi.org/project/welt-io/)
-[![python](https://img.shields.io/pypi/pyversions/welt-io.svg)](https://pypi.org/project/welt-io/)
-
-> **This project has been renamed to [welt-io-strands](https://pypi.org/project/welt-io-strands/).** Install `welt-io-strands` and import `welt_io_strands` instead — this package stays published for existing installs but receives no further releases.
+[![pypi](https://img.shields.io/pypi/v/welt-io-strands.svg)](https://pypi.org/project/welt-io-strands/)
+[![python](https://img.shields.io/pypi/pyversions/welt-io-strands.svg)](https://pypi.org/project/welt-io-strands/)
 
 The [Strands Agents](https://strandsagents.com/) (Python) adapter for [Welt](https://github.com/iwamot/welt)'s wire contract — one of Welt's [agent-side adapters](https://github.com/iwamot/welt#agent-side-adapters).
 
 ## Install
 
 ```bash
-uv add welt-io
+uv add welt-io-strands
 ```
 
 ## Usage
@@ -84,7 +82,7 @@ answer = tool_context.interrupt(
 
 ## Supported Versions
 
-Welt releases first; welt-io follows, mirroring the minor version. While both are 0.x, a welt-io 0.Y release supports Welt v0.Y — other combinations may work, but come with no guarantee.
+Welt releases first; welt-io-strands follows, mirroring the minor version. While both are 0.x, a welt-io-strands 0.Y release supports Welt v0.Y — other combinations may work, but come with no guarantee.
 
 ## License
 
