@@ -3,6 +3,8 @@
 [![pypi](https://img.shields.io/pypi/v/welt-io.svg)](https://pypi.org/project/welt-io/)
 [![python](https://img.shields.io/pypi/pyversions/welt-io.svg)](https://pypi.org/project/welt-io/)
 
+> **This project has been renamed to [welt-io-strands](https://pypi.org/project/welt-io-strands/).** Install `welt-io-strands` and import `welt_io_strands` instead — this package stays published for existing installs but receives no further releases.
+
 The [Strands Agents](https://strandsagents.com/) (Python) adapter for [Welt](https://github.com/iwamot/welt)'s wire contract — one of Welt's [agent-side adapters](https://github.com/iwamot/welt#agent-side-adapters).
 
 ## Install
