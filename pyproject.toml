@@ -39,7 +39,7 @@ dev = [
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
     "strands-agents==1.48.0",
-    "strands-agents-tools==0.8.4",
+    "strands-agents-tools==0.8.5",
 ]
 
 [build-system]
