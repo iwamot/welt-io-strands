@@ -3,6 +3,8 @@ import base64
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
+import pytest
+
 from welt_io_strands import renderable_events
 
 PNG_BYTES = b"\x89PNG\r\n\x1a\n"
@@ -25,13 +27,46 @@ class FakeResult:
     interrupts: list[FakeInterrupt] | None = None
 
 
-def rendered(events: list) -> list[dict]:
+@dataclass
+class FakeAgent:
+    """The attribute shape of a Strands Agent, as test data."""
+
+    messages: object
+
+
+def agent_calling(tool_use_id: str, name: object) -> FakeAgent:
+    """Build an agent whose messages name one tool use."""
+    return FakeAgent(
+        messages=[
+            {"role": "user", "content": [{"text": "make me one"}]},
+            {
+                "role": "assistant",
+                "content": [
+                    {"text": "on it"},
+                    {"toolUse": {"toolUseId": tool_use_id, "name": name}},
+                ],
+            },
+        ]
+    )
+
+
+def rendered(
+    events: list,
+    *,
+    agent: object | None = None,
+    files_from: set[str] | None = None,
+) -> list[dict]:
     async def source() -> AsyncIterator[dict]:
         for event in events:
             yield event
 
     async def gather() -> list[dict]:
-        return [event async for event in renderable_events(source())]
+        return [
+            event
+            async for event in renderable_events(
+                source(), agent=agent, files_from=files_from
+            )
+        ]
 
     return asyncio.run(gather())
 
@@ -153,7 +188,9 @@ def test_tool_result_image_becomes_a_file_event_after_the_tool_result() -> None:
         }
     ]
 
-    assert rendered(events) == [
+    assert rendered(
+        events, agent=agent_calling("id-1", "draw"), files_from={"draw"}
+    ) == [
         {"tool_result": {"toolUseId": "id-1", "status": "success"}},
         {"file": {"name": "image.png", "bytes": PNG_BASE64}},
     ]
@@ -185,7 +222,9 @@ def test_tool_result_document_file_is_named_from_its_name_and_format() -> None:
         }
     ]
 
-    assert rendered(events) == [
+    assert rendered(
+        events, agent=agent_calling("id-1", "write"), files_from={"write"}
+    ) == [
         {"tool_result": {"toolUseId": "id-1", "status": "success"}},
         {
             "file": {
@@ -282,9 +321,126 @@ def test_non_dict_tool_result_content_block_is_skipped() -> None:
         }
     ]
 
-    assert rendered(events) == [
-        {"tool_result": {"toolUseId": "id-1", "status": "success"}}
+    assert rendered(
+        events, agent=agent_calling("id-1", "draw"), files_from={"draw"}
+    ) == [{"tool_result": {"toolUseId": "id-1", "status": "success"}}]
+
+
+# --- which tools the agent uploads from --------------------------------------
+
+
+def tool_result_with_a_file(tool_use_id: str = "id-1") -> list[dict]:
+    """Build the stream of a tool that returned one image."""
+    return [
+        {
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": tool_use_id,
+                            "status": "success",
+                            "content": [
+                                {
+                                    "image": {
+                                        "format": "png",
+                                        "source": {"bytes": PNG_BYTES},
+                                    }
+                                }
+                            ],
+                        }
+                    }
+                ],
+            }
+        }
     ]
+
+
+def test_files_of_a_tool_left_out_of_files_from_stay_off_the_wire() -> None:
+    result = rendered(
+        tool_result_with_a_file(),
+        agent=agent_calling("id-1", "file_read"),
+        files_from={"draw"},
+    )
+
+    assert result == [{"tool_result": {"toolUseId": "id-1", "status": "success"}}]
+
+
+def test_tool_files_stay_off_the_wire_without_files_from() -> None:
+    result = rendered(tool_result_with_a_file())
+
+    assert result == [{"tool_result": {"toolUseId": "id-1", "status": "success"}}]
+
+
+def test_files_from_without_an_agent_is_an_error() -> None:
+    with pytest.raises(ValueError, match="agent"):
+        rendered(tool_result_with_a_file(), files_from={"draw"})
+
+
+def test_tool_result_without_a_tool_use_id_uploads_nothing() -> None:
+    events = [
+        {
+            "message": {
+                "role": "user",
+                "content": [
+                    {
+                        "toolResult": {
+                            "status": "success",
+                            "content": [
+                                {
+                                    "image": {
+                                        "format": "png",
+                                        "source": {"bytes": PNG_BYTES},
+                                    }
+                                }
+                            ],
+                        }
+                    }
+                ],
+            }
+        }
+    ]
+
+    result = rendered(events, agent=agent_calling("id-1", "draw"), files_from={"draw"})
+
+    assert result == [{"tool_result": {"toolUseId": None, "status": "success"}}]
+
+
+def test_tool_use_the_agent_does_not_know_uploads_nothing() -> None:
+    result = rendered(
+        tool_result_with_a_file("id-other"),
+        agent=agent_calling("id-1", "draw"),
+        files_from={"draw"},
+    )
+
+    assert result == [{"tool_result": {"toolUseId": "id-other", "status": "success"}}]
+
+
+def test_tool_use_without_a_string_name_uploads_nothing() -> None:
+    result = rendered(
+        tool_result_with_a_file(),
+        agent=agent_calling("id-1", 123),
+        files_from={"draw"},
+    )
+
+    assert result == [{"tool_result": {"toolUseId": "id-1", "status": "success"}}]
+
+
+def test_malformed_agent_messages_upload_nothing() -> None:
+    for messages in (
+        None,
+        ["not a dict"],
+        [{"role": "assistant", "content": "not a list"}],
+        [{"role": "assistant", "content": ["not a dict"]}],
+        [{"role": "assistant", "content": [{"toolUse": "not a dict"}]}],
+    ):
+        result = rendered(
+            tool_result_with_a_file(),
+            agent=FakeAgent(messages=messages),
+            files_from={"draw"},
+        )
+
+        assert result == [{"tool_result": {"toolUseId": "id-1", "status": "success"}}]
 
 
 def test_result_interrupt_becomes_an_interrupt_event() -> None:

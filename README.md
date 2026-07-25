@@ -13,7 +13,7 @@ uv add welt-io-strands
 
 ## Usage
 
-See [`examples/agent`](examples/agent) — the smallest complete agent built on this package (text streaming, image generation, file input, and a human-approval tool), which doubles as the example for [Welt's Quick Start](https://github.com/iwamot/welt#quick-start). The sections below explain the adapters it wires in.
+See [`examples/agent`](examples/agent) — the smallest complete agent built on this package (text streaming, tool use, image generation, file output, file input, and human-approval tools), which doubles as the example for [Welt's Quick Start](https://github.com/iwamot/welt#quick-start). The sections below explain the adapters it wires in.
 
 ## API
 
@@ -31,7 +31,7 @@ Turns Welt's resume payload — a mapping of interrupt id to the answer a human 
 
 ### Outbound
 
-#### `renderable_events(events)`
+#### `renderable_events(events, agent=..., files_from=...)`
 
 Reduces raw `stream_async` events — not JSON-serializable as-is — to the events Welt renders:
 
@@ -39,20 +39,32 @@ Reduces raw `stream_async` events — not JSON-serializable as-is — to the eve
 |---|---|---|
 | Text deltas | `data` | The streamed reply |
 | Tool invocations and results | `current_tool_use` / `tool_result` | "Using tool" indicators (tool output stays off the wire) |
-| Image / document / video blocks a tool or the model produces | `file` | An uploaded file ([size limits](https://github.com/iwamot/welt/blob/main/docs/wire.md#limits)) |
+| Image / document / video blocks the model produces, or a tool named in `files_from` returns | `file` | An uploaded file ([size limits](https://github.com/iwamot/welt/blob/main/docs/wire.md#limits)) |
 | Pending [interrupts](https://strandsagents.com/docs/user-guide/concepts/interrupts/) | `interrupt` | Buttons and/or a text field |
 
 A run that stops for human input ends its stream with one `interrupt` event per pending interrupt; agents that do not use interrupts see no change.
 
+A tool hands files to the model for either of two reasons — to have it read them, or to give them to the human — and only the agent knows which is which, so name the tools whose files belong in the thread:
+
+```python
+async for event in renderable_events(
+    stream, agent=agent, files_from={"generate_image"}
+):
+```
+
+A tool left out keeps its files to the model: strands-tools' [`file_read`](https://github.com/strands-agents/tools/blob/main/src/strands_tools/file_read.py) reading a PDF does not drop it into the thread as a side effect. A tool named there needs no code of its own — strands-tools' [`generate_image`](https://github.com/strands-agents/tools/blob/main/src/strands_tools/generate_image.py) returns the image as a tool-result block, and naming it is all it takes; a tool of your own returns image, document, or video blocks the same way. The `agent` is what makes the names resolvable: its messages hold the tool behind each result, the only place that survives a resume, where the stream carries the result alone.
+
+Uploaded names come from the block — a document's own `name` plus its format, the block's kind for the rest (`image.png`). That name is the model's handle on the document as much as a filename, and Converse rejects a request whose messages carry two documents under one name, so a tool that returns documents has to keep their names apart across the run: strands-tools' `file_read` appends a short uuid to each.
+
 #### `file_event(name, data)`
 
-Builds the same `file` event from a filename and raw bytes, for attaching arbitrary files of your own:
+Builds the same `file` event from a filename and raw bytes, for the files the host app attaches itself:
 
 ```python
 yield file_event("report.csv", csv_bytes)
 ```
 
-Tool-generated files need no code at all — for example, strands-tools' [`generate_image`](https://github.com/strands-agents/tools/blob/main/src/strands_tools/generate_image.py) returns the image as a tool-result block, which streams into the thread by itself. The [example agent](examples/agent) includes it.
+Tools have no use for it — they hand files to the agent as content blocks, and `files_from` decides which of those reach the thread.
 
 #### `interrupt_reason(message, options=..., input=...)`
 
@@ -79,6 +91,7 @@ answer = tool_context.interrupt(
 - **Prefix your interrupt names** (`myapp-deploy-approval`). Hook-raised interrupts must be unique across the whole event, tool-raised ones within their tool — a prefix keeps both as the agent grows.
 - **Strands' ready-made [`HumanInTheLoop`](https://strandsagents.com/docs/user-guide/concepts/agents/interventions/human-in-the-loop/) intervention works over Welt as-is.** Its string reasons render with Welt's default **Approve** / **Deny** buttons, whose `y` / `n` values its default evaluator understands. Do not pass `ask`: both of its inline modes block the agent waiting for input that Slack can never deliver — the default interrupt/resume mode is the one Welt drives.
 - **Route stdio consent prompts through interrupts instead.** For strands-tools packages that gate themselves behind a stdio prompt, set `BYPASS_TOOL_CONSENT=true` and let `HumanInTheLoop` do the gating over Slack. The strands-tools `handoff_to_user` tool is likewise stdio-bound; a small interrupt-raising tool of your own is the replacement.
+- **Code before `interrupt` runs again on resume.** Strands re-executes the interrupted tool from its start, so whatever precedes an interrupt and must not run twice — side effects, or work that must match what the human approved — has to be skipped on the second pass. Memoizing on `tool_context.tool_use["toolUseId"]`, the same id on both passes, is enough: the cache lives in the same process as the interrupt state it pairs with. The [example agent](examples/agent)'s `sample_draft_report` shows the pattern.
 
 ## Supported Versions
 

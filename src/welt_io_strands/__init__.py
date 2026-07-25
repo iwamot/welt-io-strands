@@ -13,9 +13,9 @@ fit it in either direction:
   JSON-serializable (the Agent itself, UUIDs, traces, raw file bytes), which
   the AgentCore Runtime SDK would degrade to a plain string on the SSE wire.
   `renderable_events` reduces the stream to the events Welt renders, with
-  generated files base64-encoded — the inbound encoding in reverse.
-  `file_event` builds the same `file` event from a name and raw bytes, so
-  agents can attach files of their own alongside the reduced stream.
+  the files of the tools the agent names base64-encoded — the inbound
+  encoding in reverse. `file_event` builds the same `file` event from a
+  name and raw bytes, for the files the host app attaches itself.
   `interrupt_reason` builds the reason shape Welt renders as a message with
   buttons, a free-text field, or both when a tool interrupts for human
   input.
@@ -24,7 +24,7 @@ fit it in either direction:
 import base64
 import copy
 import warnings
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Collection, Sequence
 
 try:
     from ._version import __version__
@@ -137,9 +137,9 @@ def file_event(name: str, data: bytes) -> dict:
     """
     Build a `file` wire event, which Welt uploads to the Slack thread.
 
-    `renderable_events` emits these for the files a tool or the model
-    generates; this builds the same event from arbitrary bytes, for agents
-    that attach files of their own alongside the reduced stream.
+    `renderable_events` emits these for the files the model returns and the
+    files of the tools the agent names; this builds the same event from
+    arbitrary bytes, for the files the host app attaches itself.
 
     Args:
         name (str): The upload filename, extension included.
@@ -295,12 +295,29 @@ def _built_input(input_spec: dict) -> dict:
     return built
 
 
-async def renderable_events(events: AsyncIterator[dict]) -> AsyncIterator[dict]:
+async def renderable_events(
+    events: AsyncIterator[dict],
+    *,
+    agent: object | None = None,
+    files_from: Collection[str] | None = None,
+) -> AsyncIterator[dict]:
     """
     Reduce Strands `stream_async` events to the subset Welt renders.
 
+    Which of the agent's files belong in the reply is the agent's call, so
+    a tool's files become `file` events only when the tool is named in
+    `files_from` — a tool that hands the model a file to read
+    (strands-tools' `file_read`, say) stays off the wire unless it is
+    listed. Files the model itself returns are its reply, and always go.
+
     Args:
         events (AsyncIterator[dict]): Raw `stream_async` events.
+        agent (object | None): The Agent being streamed, whose messages
+            name the tool behind each tool result — the only place the name
+            survives a resume, where the stream carries the result alone.
+            Required with `files_from`.
+        files_from (Collection[str] | None): The names of the tools whose
+            files become `file` events. None takes files from none of them.
 
     Yields:
         dict: A `data` event per text chunk, a `current_tool_use` event per
@@ -308,19 +325,26 @@ async def renderable_events(events: AsyncIterator[dict]) -> AsyncIterator[dict]:
             slimmed to the toolUseId and status, so text tool output stays
             off the wire — followed by a `file` event (filename plus base64
             bytes, which Welt uploads to the Slack thread) per image,
-            document, or video block the tool returned. Such blocks in the
-            assistant message itself become `file` events the same way.
-            A stream that stops for human input ends with an `interrupt`
-            event per pending interrupt (its id, name, and reason, which
-            Welt renders as buttons in the Slack thread).
+            document, or video block a tool listed in `files_from`
+            returned. Such blocks in the assistant message itself become
+            `file` events unconditionally. A stream that stops for human
+            input ends with an `interrupt` event per pending interrupt (its
+            id, name, and reason, which Welt renders as buttons in the
+            Slack thread).
+
+    Raises:
+        ValueError: If `files_from` is given without an agent, which
+            leaves the tool behind a file unknowable.
     """
+    if files_from is not None and agent is None:
+        raise ValueError("files_from needs the agent the tool names come from")
     async for event in events:
         if "data" in event:
             yield {"data": event["data"]}
         elif "current_tool_use" in event:
             yield {"current_tool_use": event["current_tool_use"]}
         elif "message" in event:
-            for rendered in _message_events(event["message"]):
+            for rendered in _message_events(event["message"], agent, files_from):
                 yield rendered
         elif "result" in event:
             for rendered in _interrupt_events(event["result"]):
@@ -360,19 +384,25 @@ def _interrupt_events(result: object) -> list[dict]:
     ]
 
 
-def _message_events(message: object) -> list[dict]:
+def _message_events(
+    message: object, agent: object | None, files_from: Collection[str] | None
+) -> list[dict]:
     """
     Extract renderable events from a Strands message event.
 
     Strands adds tool results to the conversation as a message whose content
     blocks each carry a `toolResult`; a `tool_result` entry is slimmed to the
     toolUseId and status, followed by a `file` event per image/document/video
-    block the tool returned. Model messages carry text (nothing to extract —
-    it already streamed as `data` events) and, for models that generate files,
-    image/document/video blocks, which become `file` events too.
+    block a tool the agent takes files from returned. Model messages carry
+    text (nothing to extract — it already streamed as `data` events) and, for
+    models that generate files, image/document/video blocks, which become
+    `file` events too.
 
     Args:
         message (object): The `message` value of a stream event.
+        agent (object | None): The Agent being streamed.
+        files_from (Collection[str] | None): The names of the tools whose
+            files become `file` events.
 
     Returns:
         list[dict]: The `tool_result` and `file` events, in content order.
@@ -388,27 +418,86 @@ def _message_events(message: object) -> list[dict]:
             continue
         tool_result = block.get("toolResult")
         if isinstance(tool_result, dict):
+            tool_use_id = tool_result.get("toolUseId")
             events.append(
                 {
                     "tool_result": {
-                        "toolUseId": tool_result.get("toolUseId"),
+                        "toolUseId": tool_use_id,
                         "status": tool_result.get("status"),
                     }
                 }
             )
             result_content = tool_result.get("content")
-            if isinstance(result_content, list):
-                events.extend(
-                    event
-                    for result_block in result_content
-                    if isinstance(result_block, dict)
-                    and (event := _file_event_from_block(result_block)) is not None
-                )
+            if not isinstance(result_content, list):
+                continue
+            if not _emits_files(agent, files_from, tool_use_id):
+                continue
+            events.extend(
+                event
+                for result_block in result_content
+                if isinstance(result_block, dict)
+                and (event := _file_event_from_block(result_block)) is not None
+            )
         else:
             event = _file_event_from_block(block)
             if event is not None:
                 events.append(event)
     return events
+
+
+def _emits_files(
+    agent: object | None, files_from: Collection[str] | None, tool_use_id: object
+) -> bool:
+    """
+    Tell whether the tool behind a tool result is one to take files from.
+
+    Args:
+        agent (object | None): The Agent being streamed.
+        files_from (Collection[str] | None): The names of the tools whose
+            files become `file` events.
+        tool_use_id (object): The `toolUseId` of the tool result.
+
+    Returns:
+        bool: Whether the tool's files belong on the wire.
+    """
+    if not files_from or not isinstance(tool_use_id, str):
+        return False
+    return _tool_name(agent, tool_use_id) in files_from
+
+
+def _tool_name(agent: object | None, tool_use_id: str) -> str | None:
+    """
+    Find the name of the tool a tool use id belongs to.
+
+    The stream carries the name in the assistant message that requested the
+    tool, but a resumed run streams the tool's result alone — the agent's
+    messages, which outlive the interrupt, hold the request either way.
+
+    Args:
+        agent (object | None): The Agent being streamed.
+        tool_use_id (str): The id of the tool use to name.
+
+    Returns:
+        str | None: The tool's name, or None if the agent's messages do not
+            hold the request.
+    """
+    messages = getattr(agent, "messages", None)
+    if not isinstance(messages, list):
+        return None
+    for message in reversed(messages):
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict):
+                continue
+            tool_use = block.get("toolUse")
+            if isinstance(tool_use, dict) and tool_use.get("toolUseId") == tool_use_id:
+                name = tool_use.get("name")
+                return name if isinstance(name, str) else None
+    return None
 
 
 # Converse format tokens double as filename extensions, except this one.
