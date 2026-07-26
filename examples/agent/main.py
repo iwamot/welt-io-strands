@@ -14,7 +14,7 @@ JSON wire contract, which welt-io-strands adapts in both directions.
 import os
 import tempfile
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from uuid import uuid4
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
@@ -149,7 +149,7 @@ def _drafted_report(tool_use_id: str, topic: str) -> str:
         str: The draft report body.
     """
     if tool_use_id not in _drafts:
-        drafted_at = datetime.now(timezone.utc).isoformat()
+        drafted_at = datetime.now(UTC).isoformat()
         _drafts[tool_use_id] = (
             f"# {topic}\n\nEverything about {topic} is going well.\n\n"
             f"_Drafted at {drafted_at}._\n"
