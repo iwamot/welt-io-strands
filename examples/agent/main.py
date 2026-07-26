@@ -194,9 +194,10 @@ def sample_draft_report(tool_context: ToolContext, topic: str) -> str | dict:
             "status": "success",
             "content": [
                 {
-                    "text": "The draft was approved and is already published"
-                    f" to the thread as {name}.md. The publish flow is"
-                    " complete; no further review or approval is needed."
+                    "text": "The user answered the publish question in the"
+                    " thread by pressing Publish, so this draft is already"
+                    f" published there as {name}.md. The publish flow is"
+                    " complete; nothing is left to approve."
                 },
                 {
                     "document": {
