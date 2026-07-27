@@ -29,6 +29,12 @@ Returns a copy of Welt's Converse-shaped messages with the base64-encoded file b
 
 Turns Welt's resume payload — a mapping of interrupt id to the answer a human chose — into the `interruptResponse` items that `Agent.stream_async` resumes from.
 
+#### Payloads that violate the contract
+
+Both functions reject a payload the [wire contract](https://github.com/iwamot/welt/blob/main/docs/wire.md#malformed-payloads) does not describe — an unknown role, a block missing its bytes, base64 that was never valid — with a `TypeError` where a value is of the wrong type and a `ValueError` where it is the right type but unusable. Welt does not send those, so a raise means the caller is not Welt or Welt has a bug; either way, decoding what is left would hand the agent a conversation with a turn missing.
+
+The format token is the exception: it is checked for presence, not against a list of known tokens, and travels on to Bedrock unchanged — the side that knows which ones it takes.
+
 ### Outbound
 
 #### `renderable_events(events, agent=..., files_from=...)`
