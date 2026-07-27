@@ -22,6 +22,7 @@ fit it in either direction:
 """
 
 import base64
+import binascii
 import copy
 import warnings
 from collections.abc import AsyncIterator, Collection, Sequence
@@ -41,7 +42,7 @@ __all__ = [
 ]
 
 
-def decode_messages(messages: list) -> list:
+def decode_messages(messages: object) -> list:
     """
     Decode Welt's messages payload into the messages Strands consumes.
 
@@ -50,18 +51,28 @@ def decode_messages(messages: list) -> list:
     base64-encoded — JSON cannot carry raw bytes — and Strands expects
     them raw.
 
+    A payload that departs from the wire contract raises: it is a bug on
+    the sending side, and decoding what is left of it would hand the agent
+    a conversation with a turn missing.
+
     Args:
-        messages (list): The `messages` value of Welt's payload.
+        messages (object): The `messages` value of Welt's payload.
 
     Returns:
         list: A decoded copy of the messages; the input is left untouched.
+
+    Raises:
+        TypeError: If a value in the payload is of the wrong type.
+        ValueError: If a value is of the right type but violates the
+            contract.
     """
-    decoded = copy.deepcopy(messages)
-    _restore_file_bytes(decoded)
+    decoded = _message_list(copy.deepcopy(messages))
+    for source, data in _decoded_sources(decoded):
+        source["bytes"] = data
     return decoded
 
 
-def decode_file_blocks(messages: list) -> None:
+def decode_file_blocks(messages: object) -> None:
     """
     Decode base64 image/document/video bytes back to raw bytes, in place.
 
@@ -69,10 +80,17 @@ def decode_file_blocks(messages: list) -> None:
     instead of mutating its input.
 
     Args:
-        messages (list): The Converse-shaped messages from Welt's payload.
+        messages (object): The Converse-shaped messages from Welt's
+            payload.
 
     Returns:
         None
+
+    Raises:
+        TypeError: If a value in the payload is of the wrong type.
+        ValueError: If a value is of the right type but violates the
+            contract. Either way the input is left untouched, since the
+            whole payload is checked before any of it is decoded.
     """
     warnings.warn(
         "decode_file_blocks is deprecated; use decode_messages, which returns"
@@ -80,38 +98,190 @@ def decode_file_blocks(messages: list) -> None:
         DeprecationWarning,
         stacklevel=2,
     )
-    _restore_file_bytes(messages)
+    for source, data in _decoded_sources(_message_list(messages)):
+        source["bytes"] = data
 
 
-def _restore_file_bytes(messages: list) -> None:
+def _message_list(messages: object) -> list:
     """
-    Decode base64 image/document/video bytes back to raw bytes, in place.
+    Check that a payload's `messages` value is a list of messages.
 
     Args:
-        messages (list): The Converse-shaped messages from Welt's payload.
+        messages (object): The `messages` value of Welt's payload.
 
     Returns:
-        None
+        list: The same value.
+
+    Raises:
+        TypeError: If it is not a list.
     """
+    if not isinstance(messages, list):
+        raise TypeError(f"messages must be a list, got {_shown(messages)}")
+    return messages
+
+
+def _decoded_sources(messages: list) -> list[tuple[dict, bytes]]:
+    """
+    Check a messages payload and decode the base64 bytes it carries.
+
+    The whole payload is walked before anything is written back, so a
+    violation anywhere leaves no half-decoded messages behind.
+
+    Args:
+        messages (list): The `messages` value of Welt's payload.
+
+    Returns:
+        list[tuple[dict, bytes]]: One entry per file block: the `source`
+            dict to write into, and the raw bytes to write.
+
+    Raises:
+        TypeError: If a value in the payload is of the wrong type.
+        ValueError: If a value is of the right type but violates the
+            contract.
+    """
+    sources: list[tuple[dict, bytes]] = []
     for message in messages:
         if not isinstance(message, dict):
-            continue
+            raise TypeError(f"a message must be a dict, got {_shown(message)}")
+        role = message.get("role")
+        if role not in ("user", "assistant"):
+            raise ValueError(
+                f"a message's role must be 'user' or 'assistant', got {_shown(role)}"
+            )
         content = message.get("content")
         if not isinstance(content, list):
-            continue
+            raise TypeError(
+                f"a message's content must be a list, got {_shown(content)}"
+            )
         for block in content:
-            if not isinstance(block, dict):
-                continue
-            for key in ("image", "document", "video"):
-                media = block.get(key)
-                if not isinstance(media, dict):
-                    continue
-                source = media.get("source")
-                if isinstance(source, dict) and isinstance(source.get("bytes"), str):
-                    source["bytes"] = base64.b64decode(source["bytes"])
+            sources.extend(_block_sources(block, files=role == "user"))
+    return sources
 
 
-def decode_interrupt_responses(responses: dict) -> list:
+def _block_sources(block: object, *, files: bool) -> list[tuple[dict, bytes]]:
+    """
+    Check one content block and decode the base64 bytes it carries.
+
+    Args:
+        block (object): One entry of a message's `content`.
+        files (bool): Whether the block may carry a file — Welt embeds
+            Slack uploads in user messages only, and its own earlier
+            replies carry text and nothing else.
+
+    Returns:
+        list[tuple[dict, bytes]]: The block's `source` dict and raw bytes,
+            or nothing for a text block.
+
+    Raises:
+        TypeError: If a value in the block is of the wrong type.
+        ValueError: If a value is of the right type but violates the
+            contract.
+    """
+    if not isinstance(block, dict):
+        raise TypeError(f"a content block must be a dict, got {_shown(block)}")
+    if "text" in block:
+        text = block.get("text")
+        if not isinstance(text, str):
+            raise TypeError(f"a text block's text must be a str, got {_shown(text)}")
+        return []
+    if not files:
+        raise ValueError(
+            f"an assistant message carries text blocks only, got the keys"
+            f" {_keys(block)}"
+        )
+    for kind in ("image", "document", "video"):
+        if kind in block:
+            return [_media_source(block.get(kind), kind)]
+    raise ValueError(
+        f"a content block must carry text, image, document, or video, got the"
+        f" keys {_keys(block)}"
+    )
+
+
+def _keys(block: dict) -> list[str]:
+    """
+    Name a content block's keys, for an error message.
+
+    Args:
+        block (dict): The offending content block.
+
+    Returns:
+        list[str]: Its keys, sorted.
+    """
+    return sorted(str(key) for key in block)
+
+
+def _media_source(media: object, kind: str) -> tuple[dict, bytes]:
+    """
+    Check one file block and decode the base64 bytes it carries.
+
+    The format token is checked for presence but not against a list of
+    known tokens: it travels on to Bedrock unchanged, which is the side
+    that knows which ones it takes.
+
+    Args:
+        media (object): The `image`, `document`, or `video` value of a
+            content block.
+        kind (str): Which of the three it is, for the error messages.
+
+    Returns:
+        tuple[dict, bytes]: The block's `source` dict, and the raw bytes
+            to write into it.
+
+    Raises:
+        TypeError: If a value in the block is of the wrong type.
+        ValueError: If a value is of the right type but violates the
+            contract.
+    """
+    subject = f"an {kind}" if kind == "image" else f"a {kind}"
+    if not isinstance(media, dict):
+        raise TypeError(f"{subject} block must be a dict, got {_shown(media)}")
+    file_format = media.get("format")
+    if not isinstance(file_format, str):
+        raise TypeError(f"{subject} block needs a format, got {_shown(file_format)}")
+    if kind == "document":
+        name = media.get("name")
+        if not isinstance(name, str):
+            raise TypeError(f"a document block needs a name, got {_shown(name)}")
+        if not name:
+            raise ValueError("a document block's name must not be empty")
+    source = media.get("source")
+    if not isinstance(source, dict):
+        raise TypeError(f"{subject} block needs a source dict, got {_shown(source)}")
+    data = source.get("bytes")
+    if not isinstance(data, str):
+        raise TypeError(
+            f"{subject} block needs base64 source.bytes, got {_shown(data)}"
+        )
+    if not data:
+        raise ValueError(f"{subject} block's source.bytes must not be empty")
+    # validate=True: the default discards what is not base64 and returns
+    # bytes that were never encoded, where this refuses them.
+    try:
+        decoded = base64.b64decode(data, validate=True)
+    except binascii.Error as error:
+        raise ValueError(
+            f"{subject} block's source.bytes is not valid base64"
+        ) from error
+    return source, decoded
+
+
+def _shown(value: object) -> str:
+    """
+    Render a value for an error message, without dumping a whole payload.
+
+    Args:
+        value (object): The offending value.
+
+    Returns:
+        str: The value itself if it is a scalar, its type name otherwise.
+    """
+    if value is None or isinstance(value, (bool, int, float, str)):
+        return repr(value)
+    return type(value).__name__
+
+
+def decode_interrupt_responses(responses: object) -> list:
     """
     Decode Welt's interrupt answers into Strands' resume input.
 
@@ -120,17 +290,32 @@ def decode_interrupt_responses(responses: dict) -> list:
     list of `interruptResponse` content items; the returned list feeds
     `Agent.stream_async` directly.
 
+    A payload that departs from the wire contract raises: resuming a run
+    with an answer short is worse than not resuming it at all.
+
     Args:
-        responses (dict): The `interrupt_responses` value of Welt's
+        responses (object): The `interrupt_responses` value of Welt's
             payload.
 
     Returns:
         list: One `interruptResponse` item per answered interrupt.
+
+    Raises:
+        TypeError: If the payload is of the wrong type.
     """
-    return [
-        {"interruptResponse": {"interruptId": interrupt_id, "response": response}}
-        for interrupt_id, response in responses.items()
-    ]
+    if not isinstance(responses, dict):
+        raise TypeError(f"interrupt_responses must be a dict, got {_shown(responses)}")
+    decoded = []
+    for interrupt_id, response in responses.items():
+        if not isinstance(response, str):
+            raise TypeError(
+                f"the answer to {_shown(interrupt_id)} must be a str,"
+                f" got {_shown(response)}"
+            )
+        decoded.append(
+            {"interruptResponse": {"interruptId": interrupt_id, "response": response}}
+        )
+    return decoded
 
 
 def file_event(name: str, data: bytes) -> dict:
