@@ -19,13 +19,26 @@ fit it in either direction:
   `interrupt_reason` builds the reason shape Welt renders as a message with
   buttons, a free-text field, or both when a tool interrupts for human
   input.
+
+Neither direction is checked by hand. What arrives is checked against
+Welt's published schemas, vendored as `schema/` and compiled into
+`_schema.py`, and what the builders produce is checked against them before
+it is returned. The reply stream is read as what Strands documents it to
+be: `stream_async` yields plain event dicts, so the keys are read as keys,
+and the AgentResult ending the stream as the object it is.
 """
 
 import base64
-import binascii
 import copy
 import warnings
 from collections.abc import AsyncIterator, Collection, Sequence
+from typing import Protocol, cast
+
+from jsonschema import Draft202012Validator
+from jsonschema.exceptions import best_match
+from jsonschema.protocols import Validator
+
+from ._schema import REPLY_EVENTS, REQUEST_PAYLOAD
 
 try:
     from ._version import __version__
@@ -42,6 +55,59 @@ __all__ = [
 ]
 
 
+# One validator per envelope value, built once: `decode_messages` and
+# `decode_interrupt_responses` each take the value rather than the whole
+# payload, so each points at the schema's definition for it.
+def _validator(schema: dict, definition: str) -> Validator:
+    """
+    Build a validator for one definition of a wire schema.
+
+    Args:
+        schema (dict): The schema carrying the definition.
+        definition (str): The name under the schema's `$defs`.
+
+    Returns:
+        Validator: The validator.
+    """
+    return Draft202012Validator(
+        {"$ref": f"#/$defs/{definition}", "$defs": schema["$defs"]}
+    )
+
+
+# Inbound: the two envelope values, each taken on its own.
+_MESSAGES = _validator(REQUEST_PAYLOAD, "messages")
+_INTERRUPT_RESPONSES = _validator(REQUEST_PAYLOAD, "interruptResponses")
+
+# Outbound: what the builders below must produce for Welt to render it.
+_FILE = _validator(REPLY_EVENTS, "file")
+_STRUCTURED_REASON = _validator(REPLY_EVENTS, "structuredReason")
+
+
+def _checked(validator: Validator, payload: object) -> None:
+    """
+    Check a payload, raising the most specific error it produced.
+
+    A message is checked against one definition per role, so a violation
+    inside one fails the pair and is reported against the message as a
+    whole. The error that says which block, and why, is among the sub-
+    errors, which is the one worth raising.
+
+    Args:
+        validator (Validator): The validator for this envelope value.
+        payload (object): The value from Welt's payload.
+
+    Returns:
+        None
+
+    Raises:
+        jsonschema.exceptions.ValidationError: If the payload violates the
+            wire contract.
+    """
+    error = best_match(validator.iter_errors(payload))
+    if error is not None:
+        raise error
+
+
 def decode_messages(messages: object) -> list:
     """
     Decode Welt's messages payload into the messages Strands consumes.
@@ -51,9 +117,9 @@ def decode_messages(messages: object) -> list:
     base64-encoded — JSON cannot carry raw bytes — and Strands expects
     them raw.
 
-    A payload that departs from the wire contract raises: it is a bug on
-    the sending side, and decoding what is left of it would hand the agent
-    a conversation with a turn missing.
+    The payload is checked against Welt's published schema first, so a
+    payload that departs from the wire contract raises rather than reaching
+    the agent as a conversation with a turn missing.
 
     Args:
         messages (object): The `messages` value of Welt's payload.
@@ -62,13 +128,15 @@ def decode_messages(messages: object) -> list:
         list: A decoded copy of the messages; the input is left untouched.
 
     Raises:
-        TypeError: If a value in the payload is of the wrong type.
-        ValueError: If a value is of the right type but violates the
-            contract.
+        jsonschema.exceptions.ValidationError: If the payload violates the
+            wire contract. The error names the offending path.
+        binascii.Error: If a file block's bytes are not valid base64, which
+            the schema annotates but does not assert.
     """
-    decoded = _message_list(copy.deepcopy(messages))
-    for source, data in _decoded_sources(decoded):
-        source["bytes"] = data
+    _checked(_MESSAGES, messages)
+    # The schema has vouched for the shape; the cast tells the type checker.
+    decoded = copy.deepcopy(cast(list, messages))
+    _decode_sources(decoded)
     return decoded
 
 
@@ -87,10 +155,11 @@ def decode_file_blocks(messages: object) -> None:
         None
 
     Raises:
-        TypeError: If a value in the payload is of the wrong type.
-        ValueError: If a value is of the right type but violates the
-            contract. Either way the input is left untouched, since the
-            whole payload is checked before any of it is decoded.
+        jsonschema.exceptions.ValidationError: If the payload violates the
+            wire contract. The input is left untouched, since the whole
+            payload is checked before any of it is decoded.
+        binascii.Error: If a file block's bytes are not valid base64, which
+            the schema annotates but does not assert.
     """
     warnings.warn(
         "decode_file_blocks is deprecated; use decode_messages, which returns"
@@ -98,187 +167,33 @@ def decode_file_blocks(messages: object) -> None:
         DeprecationWarning,
         stacklevel=2,
     )
-    for source, data in _decoded_sources(_message_list(messages)):
-        source["bytes"] = data
+    _checked(_MESSAGES, messages)
+    # The schema has vouched for the shape; the cast tells the type checker.
+    _decode_sources(cast(list, messages))
 
 
-def _message_list(messages: object) -> list:
+def _decode_sources(messages: list) -> None:
     """
-    Check that a payload's `messages` value is a list of messages.
+    Restore the raw bytes of every file block, in place.
 
     Args:
-        messages (object): The `messages` value of Welt's payload.
+        messages (list): Messages already checked against the schema.
 
     Returns:
-        list: The same value.
+        None
 
     Raises:
-        TypeError: If it is not a list.
+        binascii.Error: If a block's bytes are not valid base64.
     """
-    if not isinstance(messages, list):
-        raise TypeError(f"messages must be a list, got {_shown(messages)}")
-    return messages
-
-
-def _decoded_sources(messages: list) -> list[tuple[dict, bytes]]:
-    """
-    Check a messages payload and decode the base64 bytes it carries.
-
-    The whole payload is walked before anything is written back, so a
-    violation anywhere leaves no half-decoded messages behind.
-
-    Args:
-        messages (list): The `messages` value of Welt's payload.
-
-    Returns:
-        list[tuple[dict, bytes]]: One entry per file block: the `source`
-            dict to write into, and the raw bytes to write.
-
-    Raises:
-        TypeError: If a value in the payload is of the wrong type.
-        ValueError: If a value is of the right type but violates the
-            contract.
-    """
-    sources: list[tuple[dict, bytes]] = []
     for message in messages:
-        if not isinstance(message, dict):
-            raise TypeError(f"a message must be a dict, got {_shown(message)}")
-        role = message.get("role")
-        if role not in ("user", "assistant"):
-            raise ValueError(
-                f"a message's role must be 'user' or 'assistant', got {_shown(role)}"
-            )
-        content = message.get("content")
-        if not isinstance(content, list):
-            raise TypeError(
-                f"a message's content must be a list, got {_shown(content)}"
-            )
-        for block in content:
-            sources.extend(_block_sources(block, files=role == "user"))
-    return sources
-
-
-def _block_sources(block: object, *, files: bool) -> list[tuple[dict, bytes]]:
-    """
-    Check one content block and decode the base64 bytes it carries.
-
-    Args:
-        block (object): One entry of a message's `content`.
-        files (bool): Whether the block may carry a file — Welt embeds
-            Slack uploads in user messages only, and its own earlier
-            replies carry text and nothing else.
-
-    Returns:
-        list[tuple[dict, bytes]]: The block's `source` dict and raw bytes,
-            or nothing for a text block.
-
-    Raises:
-        TypeError: If a value in the block is of the wrong type.
-        ValueError: If a value is of the right type but violates the
-            contract.
-    """
-    if not isinstance(block, dict):
-        raise TypeError(f"a content block must be a dict, got {_shown(block)}")
-    if "text" in block:
-        text = block.get("text")
-        if not isinstance(text, str):
-            raise TypeError(f"a text block's text must be a str, got {_shown(text)}")
-        return []
-    if not files:
-        raise ValueError(
-            f"an assistant message carries text blocks only, got the keys"
-            f" {_keys(block)}"
-        )
-    for kind in ("image", "document", "video"):
-        if kind in block:
-            return [_media_source(block.get(kind), kind)]
-    raise ValueError(
-        f"a content block must carry text, image, document, or video, got the"
-        f" keys {_keys(block)}"
-    )
-
-
-def _keys(block: dict) -> list[str]:
-    """
-    Name a content block's keys, for an error message.
-
-    Args:
-        block (dict): The offending content block.
-
-    Returns:
-        list[str]: Its keys, sorted.
-    """
-    return sorted(str(key) for key in block)
-
-
-def _media_source(media: object, kind: str) -> tuple[dict, bytes]:
-    """
-    Check one file block and decode the base64 bytes it carries.
-
-    The format token is checked for presence but not against a list of
-    known tokens: it travels on to Bedrock unchanged, which is the side
-    that knows which ones it takes.
-
-    Args:
-        media (object): The `image`, `document`, or `video` value of a
-            content block.
-        kind (str): Which of the three it is, for the error messages.
-
-    Returns:
-        tuple[dict, bytes]: The block's `source` dict, and the raw bytes
-            to write into it.
-
-    Raises:
-        TypeError: If a value in the block is of the wrong type.
-        ValueError: If a value is of the right type but violates the
-            contract.
-    """
-    subject = f"an {kind}" if kind == "image" else f"a {kind}"
-    if not isinstance(media, dict):
-        raise TypeError(f"{subject} block must be a dict, got {_shown(media)}")
-    file_format = media.get("format")
-    if not isinstance(file_format, str):
-        raise TypeError(f"{subject} block needs a format, got {_shown(file_format)}")
-    if kind == "document":
-        name = media.get("name")
-        if not isinstance(name, str):
-            raise TypeError(f"a document block needs a name, got {_shown(name)}")
-        if not name:
-            raise ValueError("a document block's name must not be empty")
-    source = media.get("source")
-    if not isinstance(source, dict):
-        raise TypeError(f"{subject} block needs a source dict, got {_shown(source)}")
-    data = source.get("bytes")
-    if not isinstance(data, str):
-        raise TypeError(
-            f"{subject} block needs base64 source.bytes, got {_shown(data)}"
-        )
-    if not data:
-        raise ValueError(f"{subject} block's source.bytes must not be empty")
-    # validate=True: the default discards what is not base64 and returns
-    # bytes that were never encoded, where this refuses them.
-    try:
-        decoded = base64.b64decode(data, validate=True)
-    except binascii.Error as error:
-        raise ValueError(
-            f"{subject} block's source.bytes is not valid base64"
-        ) from error
-    return source, decoded
-
-
-def _shown(value: object) -> str:
-    """
-    Render a value for an error message, without dumping a whole payload.
-
-    Args:
-        value (object): The offending value.
-
-    Returns:
-        str: The value itself if it is a scalar, its type name otherwise.
-    """
-    if value is None or isinstance(value, (bool, int, float, str)):
-        return repr(value)
-    return type(value).__name__
+        for block in message["content"]:
+            for kind in ("image", "document", "video"):
+                if kind in block:
+                    source = block[kind]["source"]
+                    # validate=True: the default discards what is not base64
+                    # and returns bytes that were never encoded, where this
+                    # refuses them.
+                    source["bytes"] = base64.b64decode(source["bytes"], validate=True)
 
 
 def decode_interrupt_responses(responses: object) -> list:
@@ -290,8 +205,9 @@ def decode_interrupt_responses(responses: object) -> list:
     list of `interruptResponse` content items; the returned list feeds
     `Agent.stream_async` directly.
 
-    A payload that departs from the wire contract raises: resuming a run
-    with an answer short is worse than not resuming it at all.
+    The payload is checked against Welt's published schema first, so
+    resuming a run with an answer short raises rather than happening
+    quietly.
 
     Args:
         responses (object): The `interrupt_responses` value of Welt's
@@ -301,21 +217,15 @@ def decode_interrupt_responses(responses: object) -> list:
         list: One `interruptResponse` item per answered interrupt.
 
     Raises:
-        TypeError: If the payload is of the wrong type.
+        jsonschema.exceptions.ValidationError: If the payload violates the
+            wire contract. The error names the offending path.
     """
-    if not isinstance(responses, dict):
-        raise TypeError(f"interrupt_responses must be a dict, got {_shown(responses)}")
-    decoded = []
-    for interrupt_id, response in responses.items():
-        if not isinstance(response, str):
-            raise TypeError(
-                f"the answer to {_shown(interrupt_id)} must be a str,"
-                f" got {_shown(response)}"
-            )
-        decoded.append(
-            {"interruptResponse": {"interruptId": interrupt_id, "response": response}}
-        )
-    return decoded
+    _checked(_INTERRUPT_RESPONSES, responses)
+    # The schema has vouched for the shape; the cast tells the type checker.
+    return [
+        {"interruptResponse": {"interruptId": interrupt_id, "response": response}}
+        for interrupt_id, response in cast(dict, responses).items()
+    ]
 
 
 def file_event(name: str, data: bytes) -> dict:
@@ -334,14 +244,12 @@ def file_event(name: str, data: bytes) -> dict:
         dict: The `file` event (name plus base64 bytes).
 
     Raises:
-        ValueError: If the name is empty (Welt drops a nameless file).
+        jsonschema.exceptions.ValidationError: If the event would not be
+            one Welt renders — a nameless file, which it drops.
     """
-    if not name:
-        raise ValueError("name must not be empty")
-    return {"file": {"name": name, "bytes": base64.b64encode(data).decode("ascii")}}
-
-
-_BUTTON_STYLES = frozenset({"primary", "danger"})
+    event = {"file": {"name": name, "bytes": base64.b64encode(data).decode("ascii")}}
+    _checked(_FILE, event["file"])
+    return event
 
 
 def interrupt_reason(
@@ -358,8 +266,10 @@ def interrupt_reason(
     interrupt's response (`input`), or both — whichever answer comes
     first, a pressed button or the submitted text, settles the question.
     Both widget specs are the wire's own shapes; building them through
-    this helper turns a typo into an immediate ValueError instead of a
-    silent fallback to Welt's default rendering.
+    this helper checks the result against Welt's published schema, so a
+    typo raises here instead of reaching the thread as Welt's default
+    rendering — which is what a reason it cannot match falls back to,
+    silently.
 
     Args:
         message (str): The text Welt shows above the widgets.
@@ -377,113 +287,34 @@ def interrupt_reason(
         dict: The reason to pass to `ToolContext.interrupt`.
 
     Raises:
-        ValueError: If the message is empty, neither options nor input is
-            given, or a widget spec is off — an unknown key, a missing
-            value, an empty or non-string value/label, a style that is not
-            "primary" or "danger", or a non-boolean multiline.
+        jsonschema.exceptions.ValidationError: If the reason would not be
+            one Welt renders as widgets.
     """
-    if not message:
-        raise ValueError("message must not be empty")
-    if options is None and input is None:
-        raise ValueError("options or input must be given")
     reason: dict = {"message": message}
     if options is not None:
-        reason["options"] = _built_options(options)
+        reason["options"] = list(options)
     if input is not None:
-        reason["input"] = _built_input(input)
+        reason["input"] = input
+    _checked(_STRUCTURED_REASON, reason)
     return reason
 
 
-_OPTION_KEYS = frozenset({"value", "label", "style"})
+class _Agent(Protocol):
+    """What `renderable_events` reads from the Agent being streamed.
 
-
-def _built_options(options: Sequence[dict]) -> list[dict]:
+    Strands' Agent is not a dependency of this package — an adapter that
+    imports the framework to read one attribute off it costs its callers a
+    dependency to say what a line of code already says. This names the
+    attribute instead, and an Agent satisfies it.
     """
-    Validate and build the `options` entries of a structured reason.
 
-    Only the keys the wire knows are passed through; an omitted label
-    stays omitted, leaving its default (the value) to Welt.
-
-    Args:
-        options (Sequence[dict]): One dict per button: a required `value`,
-            an optional `label`, and an optional `style`.
-
-    Returns:
-        list[dict]: The option dicts of the reason shape.
-
-    Raises:
-        ValueError: If no options are given, an option carries an unknown
-            key, a value is missing, empty, or not a string, a label is
-            empty or not a string, or a style is not "primary" or
-            "danger".
-    """
-    if not options:
-        raise ValueError("options must not be empty")
-    built: list[dict] = []
-    for option in options:
-        unknown = set(option) - _OPTION_KEYS
-        if unknown:
-            raise ValueError(f"unknown option keys: {sorted(unknown)}")
-        value = option.get("value")
-        if not isinstance(value, str) or not value:
-            raise ValueError("option value must be a non-empty string")
-        entry: dict = {"value": value}
-        if "label" in option:
-            label = option["label"]
-            if not isinstance(label, str) or not label:
-                raise ValueError("option label must be a non-empty string")
-            entry["label"] = label
-        if "style" in option:
-            style = option["style"]
-            if style not in _BUTTON_STYLES:
-                raise ValueError(f"style must be 'primary' or 'danger': {style!r}")
-            entry["style"] = style
-        built.append(entry)
-    return built
-
-
-_INPUT_KEYS = frozenset({"label", "multiline"})
-
-
-def _built_input(input_spec: dict) -> dict:
-    """
-    Validate and build the `input` entry of a structured reason.
-
-    Only the keys the wire knows are passed through; omitted ones stay
-    omitted, leaving their defaults to Welt.
-
-    Args:
-        input_spec (dict): The field spec: an optional `label` and an
-            optional `multiline`.
-
-    Returns:
-        dict: The `input` entry of the reason shape.
-
-    Raises:
-        ValueError: If the spec carries an unknown key, an empty or
-            non-string label, or a non-boolean multiline.
-    """
-    unknown = set(input_spec) - _INPUT_KEYS
-    if unknown:
-        raise ValueError(f"unknown input keys: {sorted(unknown)}")
-    built: dict = {}
-    if "label" in input_spec:
-        label = input_spec["label"]
-        if not isinstance(label, str) or not label:
-            raise ValueError("input label must be a non-empty string")
-        built["label"] = label
-    if "multiline" in input_spec:
-        multiline = input_spec["multiline"]
-        if not isinstance(multiline, bool):
-            raise ValueError("input multiline must be a bool")
-        built["multiline"] = multiline
-    return built
+    messages: list
 
 
 async def renderable_events(
     events: AsyncIterator[dict],
     *,
-    agent: object | None = None,
+    agent: _Agent | None = None,
     files_from: Collection[str] | None = None,
 ) -> AsyncIterator[dict]:
     """
@@ -497,7 +328,7 @@ async def renderable_events(
 
     Args:
         events (AsyncIterator[dict]): Raw `stream_async` events.
-        agent (object | None): The Agent being streamed, whose messages
+        agent (_Agent | None): The Agent being streamed, whose messages
             name the tool behind each tool result — the only place the name
             survives a resume, where the stream carries the result alone.
             Required with `files_from`.
@@ -532,45 +363,23 @@ async def renderable_events(
             for rendered in _message_events(event["message"], agent, files_from):
                 yield rendered
         elif "result" in event:
-            for rendered in _interrupt_events(event["result"]):
-                yield rendered
-
-
-def _interrupt_events(result: object) -> list[dict]:
-    """
-    Serialize the interrupts of the stream's final result event.
-
-    Strands ends the stream with the AgentResult; when the run stopped for
-    human input, its `interrupts` carry one Interrupt per pending question.
-    Each becomes an `interrupt` event — a faithful copy of the Interrupt's
-    id, name, and reason, the reason passed through unmodified (it is any
-    JSON-serializable value by Strands' contract, and interpreting it is
-    the renderer's job). The usual result, without interrupts, yields
-    nothing.
-
-    Args:
-        result (object): The `result` value of a stream event.
-
-    Returns:
-        list[dict]: One `interrupt` event per pending interrupt.
-    """
-    interrupts = getattr(result, "interrupts", None)
-    if interrupts is None:
-        return []
-    return [
-        {
-            "interrupt": {
-                "id": interrupt.id,
-                "name": interrupt.name,
-                "reason": interrupt.reason,
-            }
-        }
-        for interrupt in interrupts
-    ]
+            # Strands ends the stream with the AgentResult, whose interrupts
+            # carry one pending question each when the run stopped for human
+            # input. The reason travels on unmodified: it is any
+            # JSON-serializable value by Strands' contract, and interpreting
+            # it is the renderer's job.
+            for interrupt in event["result"].interrupts or ():
+                yield {
+                    "interrupt": {
+                        "id": interrupt.id,
+                        "name": interrupt.name,
+                        "reason": interrupt.reason,
+                    }
+                }
 
 
 def _message_events(
-    message: object, agent: object | None, files_from: Collection[str] | None
+    message: dict, agent: _Agent | None, files_from: Collection[str] | None
 ) -> list[dict]:
     """
     Extract renderable events from a Strands message event.
@@ -584,73 +393,60 @@ def _message_events(
     `file` events too.
 
     Args:
-        message (object): The `message` value of a stream event.
-        agent (object | None): The Agent being streamed.
+        message (dict): The `message` value of a stream event.
+        agent (_Agent | None): The Agent being streamed.
         files_from (Collection[str] | None): The names of the tools whose
             files become `file` events.
 
     Returns:
         list[dict]: The `tool_result` and `file` events, in content order.
     """
-    if not isinstance(message, dict):
-        return []
-    content = message.get("content")
-    if not isinstance(content, list):
-        return []
     events: list[dict] = []
-    for block in content:
-        if not isinstance(block, dict):
-            continue
-        tool_result = block.get("toolResult")
-        if isinstance(tool_result, dict):
-            tool_use_id = tool_result.get("toolUseId")
-            events.append(
-                {
-                    "tool_result": {
-                        "toolUseId": tool_use_id,
-                        "status": tool_result.get("status"),
-                    }
-                }
-            )
-            result_content = tool_result.get("content")
-            if not isinstance(result_content, list):
-                continue
-            if not _emits_files(agent, files_from, tool_use_id):
-                continue
-            events.extend(
-                event
-                for result_block in result_content
-                if isinstance(result_block, dict)
-                and (event := _file_event_from_block(result_block)) is not None
-            )
-        else:
+    for block in message["content"]:
+        if "toolResult" not in block:
             event = _file_event_from_block(block)
             if event is not None:
                 events.append(event)
+            continue
+        tool_result = block["toolResult"]
+        events.append(
+            {
+                "tool_result": {
+                    "toolUseId": tool_result["toolUseId"],
+                    "status": tool_result["status"],
+                }
+            }
+        )
+        if _emits_files(agent, files_from, tool_result["toolUseId"]):
+            events.extend(
+                event
+                for result_block in tool_result["content"]
+                if (event := _file_event_from_block(result_block)) is not None
+            )
     return events
 
 
 def _emits_files(
-    agent: object | None, files_from: Collection[str] | None, tool_use_id: object
+    agent: _Agent | None, files_from: Collection[str] | None, tool_use_id: str
 ) -> bool:
     """
     Tell whether the tool behind a tool result is one to take files from.
 
     Args:
-        agent (object | None): The Agent being streamed.
+        agent (_Agent | None): The Agent being streamed.
         files_from (Collection[str] | None): The names of the tools whose
             files become `file` events.
-        tool_use_id (object): The `toolUseId` of the tool result.
+        tool_use_id (str): The `toolUseId` of the tool result.
 
     Returns:
         bool: Whether the tool's files belong on the wire.
     """
-    if not files_from or not isinstance(tool_use_id, str):
+    if not files_from or agent is None:
         return False
     return _tool_name(agent, tool_use_id) in files_from
 
 
-def _tool_name(agent: object | None, tool_use_id: str) -> str | None:
+def _tool_name(agent: _Agent, tool_use_id: str) -> str | None:
     """
     Find the name of the tool a tool use id belongs to.
 
@@ -659,29 +455,17 @@ def _tool_name(agent: object | None, tool_use_id: str) -> str | None:
     messages, which outlive the interrupt, hold the request either way.
 
     Args:
-        agent (object | None): The Agent being streamed.
+        agent (_Agent): The Agent being streamed.
         tool_use_id (str): The id of the tool use to name.
 
     Returns:
         str | None: The tool's name, or None if the agent's messages do not
             hold the request.
     """
-    messages = getattr(agent, "messages", None)
-    if not isinstance(messages, list):
-        return None
-    for message in reversed(messages):
-        if not isinstance(message, dict):
-            continue
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            tool_use = block.get("toolUse")
-            if isinstance(tool_use, dict) and tool_use.get("toolUseId") == tool_use_id:
-                name = tool_use.get("name")
-                return name if isinstance(name, str) else None
+    for message in reversed(agent.messages):
+        for block in message["content"]:
+            if "toolUse" in block and block["toolUse"]["toolUseId"] == tool_use_id:
+                return block["toolUse"]["name"]
     return None
 
 
@@ -702,14 +486,13 @@ def _file_event_from_block(block: dict) -> dict | None:
             blocks without raw image/document/video bytes.
     """
     for kind in ("image", "document", "video"):
-        media = block.get(kind)
-        if not isinstance(media, dict):
+        if kind not in block:
             continue
-        source = media.get("source")
-        data = source.get("bytes") if isinstance(source, dict) else None
-        if not isinstance(data, bytes):
-            continue
-        return file_event(_file_name(kind, media), data)
+        media = block[kind]
+        # A Converse source carries the file's bytes or points at it in S3,
+        # and there is nothing to upload from a pointer.
+        data = media["source"].get("bytes")
+        return None if data is None else file_event(_file_name(kind, media), data)
     return None
 
 
@@ -725,9 +508,8 @@ def _file_name(kind: str, media: dict) -> str:
     Returns:
         str: The block's name (or its kind) plus the format as extension.
     """
-    name = media.get("name")
-    base = name if isinstance(name, str) and name else kind
+    base = media.get("name") or kind
     file_format = media.get("format")
-    if not isinstance(file_format, str) or not file_format:
+    if not file_format:
         return base
     return f"{base}.{_EXTENSION_BY_FORMAT.get(file_format, file_format)}"

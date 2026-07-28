@@ -1,9 +1,12 @@
 import asyncio
 import base64
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pytest
+from strands.agent import AgentResult
+from strands.interrupt import Interrupt
+from strands.telemetry import EventLoopMetrics
 
 from welt_io_strands import renderable_events
 
@@ -12,29 +15,13 @@ PNG_BASE64 = base64.b64encode(PNG_BYTES).decode("ascii")
 
 
 @dataclass
-class FakeInterrupt:
-    """The attribute shape of a Strands Interrupt, as test data."""
-
-    id: str
-    name: str
-    reason: object = None
-
-
-@dataclass
-class FakeResult:
-    """The attribute shape of a Strands AgentResult, as test data."""
-
-    interrupts: list[FakeInterrupt] | None = None
-
-
-@dataclass
 class FakeAgent:
-    """The attribute shape of a Strands Agent, as test data."""
+    """The one attribute renderable_events reads off a Strands Agent."""
 
-    messages: object
+    messages: list = field(default_factory=list)
 
 
-def agent_calling(tool_use_id: str, name: object) -> FakeAgent:
+def agent_calling(tool_use_id: str, name: str) -> FakeAgent:
     """Build an agent whose messages name one tool use."""
     return FakeAgent(
         messages=[
@@ -43,17 +30,28 @@ def agent_calling(tool_use_id: str, name: object) -> FakeAgent:
                 "role": "assistant",
                 "content": [
                     {"text": "on it"},
-                    {"toolUse": {"toolUseId": tool_use_id, "name": name}},
+                    {"toolUse": {"toolUseId": tool_use_id, "name": name, "input": {}}},
                 ],
             },
         ]
     )
 
 
+def result_of(*interrupts: Interrupt) -> AgentResult:
+    """Build the AgentResult that ends a stream."""
+    return AgentResult(
+        stop_reason="interrupt" if interrupts else "end_turn",
+        message={"role": "assistant", "content": []},
+        metrics=EventLoopMetrics(),
+        state={},
+        interrupts=list(interrupts) or None,
+    )
+
+
 def rendered(
     events: list,
     *,
-    agent: object | None = None,
+    agent: FakeAgent | None = None,
     files_from: set[str] | None = None,
 ) -> list[dict]:
     async def source() -> AsyncIterator[dict]:
@@ -119,8 +117,20 @@ def test_yields_one_tool_result_per_block() -> None:
             "message": {
                 "role": "user",
                 "content": [
-                    {"toolResult": {"toolUseId": "id-1", "status": "success"}},
-                    {"toolResult": {"toolUseId": "id-2", "status": "error"}},
+                    {
+                        "toolResult": {
+                            "toolUseId": "id-1",
+                            "status": "success",
+                            "content": [],
+                        }
+                    },
+                    {
+                        "toolResult": {
+                            "toolUseId": "id-2",
+                            "status": "error",
+                            "content": [],
+                        }
+                    },
                 ],
             }
         }
@@ -132,32 +142,8 @@ def test_yields_one_tool_result_per_block() -> None:
     ]
 
 
-def test_missing_tool_result_fields_become_none() -> None:
-    events = [{"message": {"role": "user", "content": [{"toolResult": {}}]}}]
-
-    assert rendered(events) == [{"tool_result": {"toolUseId": None, "status": None}}]
-
-
 def test_model_message_without_tool_results_yields_nothing() -> None:
     events = [{"message": {"role": "assistant", "content": [{"text": "hi"}]}}]
-
-    assert rendered(events) == []
-
-
-def test_non_dict_message_yields_nothing() -> None:
-    assert rendered([{"message": "not a dict"}]) == []
-
-
-def test_non_list_message_content_yields_nothing() -> None:
-    assert rendered([{"message": {"role": "user", "content": "not a list"}}]) == []
-
-
-def test_non_dict_content_block_is_skipped() -> None:
-    assert rendered([{"message": {"role": "user", "content": ["not a dict"]}}]) == []
-
-
-def test_non_dict_tool_result_is_skipped() -> None:
-    events = [{"message": {"role": "user", "content": [{"toolResult": "not a dict"}]}}]
 
     assert rendered(events) == []
 
@@ -268,52 +254,31 @@ def test_three_gp_format_maps_to_3gp_extension() -> None:
     ]
 
 
-def test_file_block_without_format_gets_no_extension() -> None:
+def test_document_without_a_name_or_format_is_named_after_its_kind() -> None:
     events = [
         {
             "message": {
                 "role": "assistant",
-                "content": [{"image": {"source": {"bytes": PNG_BYTES}}}],
+                "content": [{"document": {"source": {"bytes": b"raw"}}}],
             }
         }
     ]
 
-    assert rendered(events) == [{"file": {"name": "image", "bytes": PNG_BASE64}}]
+    assert rendered(events) == [
+        {"file": {"name": "document", "bytes": base64.b64encode(b"raw").decode()}}
+    ]
 
 
-def test_file_block_without_raw_bytes_yields_nothing() -> None:
+def test_a_file_the_source_only_points_at_stays_off_the_wire() -> None:
     events = [
         {
             "message": {
                 "role": "assistant",
                 "content": [
-                    {"image": {"format": "png", "source": {"bytes": "not raw bytes"}}},
-                    {"image": {"format": "png", "source": "not a dict"}},
                     {
                         "video": {
                             "format": "mp4",
                             "source": {"s3Location": {"uri": "s3://bucket/key"}},
-                        }
-                    },
-                ],
-            }
-        }
-    ]
-
-    assert rendered(events) == []
-
-
-def test_non_dict_tool_result_content_block_is_skipped() -> None:
-    events = [
-        {
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "toolResult": {
-                            "toolUseId": "id-1",
-                            "status": "success",
-                            "content": ["not a dict"],
                         }
                     }
                 ],
@@ -321,9 +286,7 @@ def test_non_dict_tool_result_content_block_is_skipped() -> None:
         }
     ]
 
-    assert rendered(
-        events, agent=agent_calling("id-1", "draw"), files_from={"draw"}
-    ) == [{"tool_result": {"toolUseId": "id-1", "status": "success"}}]
+    assert rendered(events) == []
 
 
 # --- which tools the agent uploads from --------------------------------------
@@ -377,35 +340,6 @@ def test_files_from_without_an_agent_is_an_error() -> None:
         rendered(tool_result_with_a_file(), files_from={"draw"})
 
 
-def test_tool_result_without_a_tool_use_id_uploads_nothing() -> None:
-    events = [
-        {
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "toolResult": {
-                            "status": "success",
-                            "content": [
-                                {
-                                    "image": {
-                                        "format": "png",
-                                        "source": {"bytes": PNG_BYTES},
-                                    }
-                                }
-                            ],
-                        }
-                    }
-                ],
-            }
-        }
-    ]
-
-    result = rendered(events, agent=agent_calling("id-1", "draw"), files_from={"draw"})
-
-    assert result == [{"tool_result": {"toolUseId": None, "status": "success"}}]
-
-
 def test_tool_use_the_agent_does_not_know_uploads_nothing() -> None:
     result = rendered(
         tool_result_with_a_file("id-other"),
@@ -416,38 +350,10 @@ def test_tool_use_the_agent_does_not_know_uploads_nothing() -> None:
     assert result == [{"tool_result": {"toolUseId": "id-other", "status": "success"}}]
 
 
-def test_tool_use_without_a_string_name_uploads_nothing() -> None:
-    result = rendered(
-        tool_result_with_a_file(),
-        agent=agent_calling("id-1", 123),
-        files_from={"draw"},
-    )
-
-    assert result == [{"tool_result": {"toolUseId": "id-1", "status": "success"}}]
-
-
-def test_malformed_agent_messages_upload_nothing() -> None:
-    for messages in (
-        None,
-        ["not a dict"],
-        [{"role": "assistant", "content": "not a list"}],
-        [{"role": "assistant", "content": ["not a dict"]}],
-        [{"role": "assistant", "content": [{"toolUse": "not a dict"}]}],
-    ):
-        result = rendered(
-            tool_result_with_a_file(),
-            agent=FakeAgent(messages=messages),
-            files_from={"draw"},
-        )
-
-        assert result == [{"tool_result": {"toolUseId": "id-1", "status": "success"}}]
-
-
 def test_result_interrupt_becomes_an_interrupt_event() -> None:
-    interrupt = FakeInterrupt(id="i-1", name="deploy-approval", reason="Deploy?")
-    events = [{"result": FakeResult(interrupts=[interrupt])}]
+    interrupt = Interrupt(id="i-1", name="deploy-approval", reason="Deploy?")
 
-    assert rendered(events) == [
+    assert rendered([{"result": result_of(interrupt)}]) == [
         {"interrupt": {"id": "i-1", "name": "deploy-approval", "reason": "Deploy?"}}
     ]
 
@@ -455,11 +361,9 @@ def test_result_interrupt_becomes_an_interrupt_event() -> None:
 def test_yields_one_interrupt_event_per_interrupt() -> None:
     events = [
         {
-            "result": FakeResult(
-                interrupts=[
-                    FakeInterrupt(id="i-1", name="approval-a", reason="A?"),
-                    FakeInterrupt(id="i-2", name="approval-b", reason="B?"),
-                ]
+            "result": result_of(
+                Interrupt(id="i-1", name="approval-a", reason="A?"),
+                Interrupt(id="i-2", name="approval-b", reason="B?"),
             )
         }
     ]
@@ -476,16 +380,17 @@ def test_interrupt_reason_is_passed_through_unmodified() -> None:
         "options": [{"value": "approve", "label": "Deploy", "style": "primary"}],
         "extra": {"nested": [1, {"deep": True}]},
     }
-    interrupt = FakeInterrupt(id="i-1", name="deploy-approval", reason=reason)
-    events = [{"result": FakeResult(interrupts=[interrupt])}]
+    interrupt = Interrupt(id="i-1", name="deploy-approval", reason=reason)
 
-    rendered_reason = rendered(events)[0]["interrupt"]["reason"]
+    rendered_reason = rendered([{"result": result_of(interrupt)}])[0]["interrupt"][
+        "reason"
+    ]
 
     assert rendered_reason is reason
 
 
 def test_interrupt_without_reason_keeps_none() -> None:
-    events = [{"result": FakeResult(interrupts=[FakeInterrupt(id="i-1", name="n")])}]
+    events = [{"result": result_of(Interrupt(id="i-1", name="n"))}]
 
     assert rendered(events) == [
         {"interrupt": {"id": "i-1", "name": "n", "reason": None}}
@@ -493,19 +398,11 @@ def test_interrupt_without_reason_keeps_none() -> None:
 
 
 def test_result_without_interrupts_yields_nothing() -> None:
-    assert rendered([{"result": FakeResult(interrupts=None)}]) == []
-
-
-def test_result_with_empty_interrupts_yields_nothing() -> None:
-    assert rendered([{"result": FakeResult(interrupts=[])}]) == []
+    assert rendered([{"result": result_of()}]) == []
 
 
 def test_unrenderable_events_are_dropped() -> None:
-    events = [
-        {"init_event_loop": True},
-        {"delta": {"text": "chunk"}},
-        {"result": object()},
-    ]
+    events = [{"init_event_loop": True}, {"delta": {"text": "chunk"}}]
 
     assert rendered(events) == []
 
@@ -517,7 +414,15 @@ def test_stream_order_is_preserved() -> None:
         {
             "message": {
                 "role": "user",
-                "content": [{"toolResult": {"toolUseId": "id-1", "status": "success"}}],
+                "content": [
+                    {
+                        "toolResult": {
+                            "toolUseId": "id-1",
+                            "status": "success",
+                            "content": [],
+                        }
+                    }
+                ],
             }
         },
         {"data": "b"},

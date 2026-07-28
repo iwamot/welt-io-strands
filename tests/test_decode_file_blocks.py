@@ -1,6 +1,7 @@
 import base64
 
 import pytest
+from jsonschema.exceptions import ValidationError
 
 from welt_io_strands import decode_file_blocks
 
@@ -32,10 +33,7 @@ def test_leaves_the_input_untouched_when_a_later_block_violates_the_contract() -
         }
     ]
 
-    with (
-        pytest.warns(DeprecationWarning),
-        pytest.raises(TypeError, match="needs a source dict"),
-    ):
+    with pytest.warns(DeprecationWarning), pytest.raises(ValidationError):
         decode_file_blocks(messages)
 
     assert source["bytes"] == encoded(b"img")
