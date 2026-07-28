@@ -23,7 +23,7 @@ The wire between Welt and the agent is JSON, specified by [Welt's wire contract]
 
 #### `decode_messages(messages)`
 
-Returns a copy of Welt's Converse-shaped messages with the base64-encoded file bytes restored to the raw bytes Strands expects; the input is left untouched. Its in-place predecessor, `decode_file_blocks(messages)`, is deprecated.
+Returns a copy of Welt's Converse-shaped messages with the base64-encoded file bytes restored to the raw bytes Strands expects; everything else — the format token included — is carried over untouched, and the input is left alone. Its in-place predecessor, `decode_file_blocks(messages)`, is deprecated.
 
 #### `decode_interrupt_responses(responses)`
 
@@ -31,9 +31,15 @@ Turns Welt's resume payload — a mapping of interrupt id to the answer a human 
 
 #### Payloads that violate the contract
 
-Both functions reject a payload the [wire contract](https://github.com/iwamot/welt/blob/main/docs/wire.md#malformed-payloads) does not describe — an unknown role, a block missing its bytes, base64 that was never valid — with a `TypeError` where a value is of the wrong type and a `ValueError` where it is the right type but unusable. Welt does not send those, so a raise means the caller is not Welt or Welt has a bug; either way, decoding what is left would hand the agent a conversation with a turn missing.
+Both functions check the payload against [Welt's published schema](https://github.com/iwamot/welt/blob/main/schema/request-payload.schema.json), vendored into this repository as `schema/`, and raise `jsonschema.exceptions.ValidationError` on one that fails — naming the path that broke it, down to the block:
 
-The format token is the exception: it is checked for presence, not against a list of known tokens, and travels on to Bedrock unchanged — the side that knows which ones it takes.
+```
+$[1].content[0].image.source.bytes: '' should be non-empty
+```
+
+Welt does not send those, so a raise means the caller is not Welt or Welt has a bug; either way, decoding what is left would hand the agent a conversation with a turn missing.
+
+The schema is the whole of what the adapter checks. The one thing it annotates without asserting is that the file bytes are base64, which `decode_messages` finds out by decoding them: a string that is not raises `binascii.Error`.
 
 ### Outbound
 
@@ -74,7 +80,7 @@ Tools have no use for it — they hand files to the agent as content blocks, and
 
 #### `interrupt_reason(message, options=..., input=...)`
 
-Builds the structured reason Welt renders as a message with the specified widgets — choice buttons (`options`), a free-text field (`input`), or both. The specs are [the wire's own shapes](https://github.com/iwamot/welt/blob/main/docs/wire.md#interrupt); omitted fields keep Welt's defaults, and a typo becomes an immediate `ValueError` instead of a silent fallback to Welt's default rendering:
+Builds the structured reason Welt renders as a message with the specified widgets — choice buttons (`options`), a free-text field (`input`), or both. The specs are [the wire's own shapes](https://github.com/iwamot/welt/blob/main/docs/wire.md#interrupt); omitted fields keep Welt's defaults, and the reason is checked against Welt's schema before it is returned, so a typo raises here instead of reaching the thread as Welt's default rendering:
 
 ```python
 answer = tool_context.interrupt(

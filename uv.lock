@@ -1907,6 +1907,9 @@ wheels = [
 [[package]]
 name = "welt-io-strands"
 source = { editable = "." }
+dependencies = [
+    { name = "jsonschema" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1919,6 +1922,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "jsonschema", specifier = ">=4.26.0" }]
 
 [package.metadata.requires-dev]
 dev = [
