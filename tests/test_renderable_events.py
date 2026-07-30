@@ -75,11 +75,25 @@ def test_data_event_is_reduced_to_its_data_key() -> None:
     assert rendered(events) == [{"data": "hello"}]
 
 
-def test_current_tool_use_event_is_reduced_to_its_key() -> None:
-    tool_use = {"toolUseId": "id-1", "name": "current_time", "input": {}}
+def test_current_tool_use_event_keeps_only_the_name_and_id() -> None:
+    tool_use = {"toolUseId": "id-1", "name": "current_time", "input": '{"city":'}
     events = [{"current_tool_use": tool_use, "agent": object()}]
 
-    assert rendered(events) == [{"current_tool_use": tool_use}]
+    assert rendered(events) == [
+        {"current_tool_use": {"name": "current_time", "toolUseId": "id-1"}}
+    ]
+
+
+def test_a_tool_use_the_stream_has_not_named_yet_carries_what_it_has() -> None:
+    events = [{"current_tool_use": {"toolUseId": "id-1", "input": ""}}]
+
+    assert rendered(events) == [{"current_tool_use": {"toolUseId": "id-1"}}]
+
+
+def test_an_empty_data_chunk_carries_nothing_to_render() -> None:
+    events = [{"data": "", "delta": {"text": ""}}, {"data": "hi"}]
+
+    assert rendered(events) == [{"data": "hi"}]
 
 
 def test_data_takes_precedence_over_current_tool_use() -> None:
@@ -338,6 +352,27 @@ def test_tool_files_stay_off_the_wire_without_files_from() -> None:
 def test_files_from_without_an_agent_is_an_error() -> None:
     with pytest.raises(ValueError, match="agent"):
         rendered(tool_result_with_a_file(), files_from={"draw"})
+
+
+def test_an_empty_files_from_needs_no_agent() -> None:
+    result = rendered(tool_result_with_a_file(), files_from=set())
+
+    assert result == [{"tool_result": {"toolUseId": "id-1", "status": "success"}}]
+
+
+def test_a_file_with_no_bytes_stays_off_the_wire() -> None:
+    events = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"image": {"format": "png", "source": {"bytes": b""}}},
+                ],
+            }
+        }
+    ]
+
+    assert rendered(events) == []
 
 
 def test_tool_use_the_agent_does_not_know_uploads_nothing() -> None:
