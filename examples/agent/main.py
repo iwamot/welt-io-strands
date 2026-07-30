@@ -246,9 +246,10 @@ async def invoke(payload: dict) -> AsyncIterator[dict]:
             decode_interrupt_responses(payload["interrupt_responses"])
         )
     else:
-        # base64 file bytes -> raw bytes; a payload that violates the wire
-        # contract raises, which the SDK reports as an `error` event.
-        messages = decode_messages(payload.get("messages"))
+        # base64 file bytes -> raw bytes. The envelope key is the
+        # discriminator, so a payload without either one is Welt's bug, and
+        # the KeyError it raises is reported as an `error` event by the SDK.
+        messages = decode_messages(payload["messages"])
         agent = Agent(
             # Any Converse model; unset falls back to the Strands default.
             model=os.environ.get("MODEL_ID"),

@@ -17,29 +17,21 @@ See [`examples/agent`](examples/agent) — the smallest complete agent built on 
 
 ## API
 
-The wire between Welt and the agent is JSON, specified by [Welt's wire contract](https://github.com/iwamot/welt/blob/main/docs/wire.md) — plain Strands values do not fit it in either direction. Two functions adapt the inbound payload, three the outbound stream.
+The wire between Welt and the agent is JSON, specified by [Welt's wire contract](https://github.com/iwamot/welt/blob/main/docs/wire.md) — plain Strands values do not fit it in either direction. Two functions adapt the inbound payload, two the outbound stream.
 
 ### Inbound
 
 #### `decode_messages(messages)`
 
-Returns a copy of Welt's Converse-shaped messages with the base64-encoded file bytes restored to the raw bytes Strands expects; everything else — the format token included — is carried over untouched, and the input is left alone. Its in-place predecessor, `decode_file_blocks(messages)`, is deprecated.
+Returns a copy of Welt's Converse-shaped messages with the base64-encoded file bytes restored to the raw bytes Strands expects; everything else — the format token included — is carried over untouched, and the input is left alone.
 
 #### `decode_interrupt_responses(responses)`
 
 Turns Welt's resume payload — a mapping of interrupt id to the answer a human chose — into the `interruptResponse` items that `Agent.stream_async` resumes from.
 
-#### Payloads that violate the contract
+#### What arrives is taken as correct
 
-Both functions check the payload against [Welt's published schema](https://github.com/iwamot/welt/blob/main/schema/request-payload.schema.json), vendored into this repository as `schema/`, and raise `jsonschema.exceptions.ValidationError` on one that fails — naming the path that broke it, down to the block:
-
-```
-$[1].content[0].image.source.bytes: '' should be non-empty
-```
-
-Welt does not send those, so a raise means the caller is not Welt or Welt has a bug; either way, decoding what is left would hand the agent a conversation with a turn missing.
-
-The schema is the whole of what the adapter checks. The one thing it annotates without asserting is that the file bytes are base64, which `decode_messages` finds out by decoding them: a string that is not raises `binascii.Error`.
+Welt builds the payload and checks its own output against the wire contract before releasing it, so these two functions do no checking of their own. A payload that departs from the contract is a bug on the sending side rather than an input to guard against, and it surfaces as an ordinary error from whatever touches it first — a `KeyError`, a `TypeError`, or `binascii.Error` from bytes that are not base64.
 
 ### Outbound
 
@@ -68,19 +60,11 @@ A tool left out keeps its files to the model: strands-tools' [`file_read`](https
 
 Uploaded names come from the block — a document's own `name` plus its format, the block's kind for the rest (`image.png`). That name is the model's handle on the document as much as a filename, and Converse rejects a request whose messages carry two documents under one name, so a tool that returns documents has to keep their names apart across the run: strands-tools' `file_read` appends a short uuid to each.
 
-#### `file_event(name, data)`
-
-Builds the same `file` event from a filename and raw bytes, for the files the host app attaches itself:
-
-```python
-yield file_event("report.csv", csv_bytes)
-```
-
-Tools have no use for it — they hand files to the agent as content blocks, and `files_from` decides which of those reach the thread.
+Each event carries only what Welt reads. A `current_tool_use` is cut down to the name and id behind the indicator, so the tool's arguments — which Strands re-sends in full on every input delta — stay off the wire, and an event with nothing to render (a text chunk the model left empty, a file with no bytes) is not sent at all.
 
 #### `interrupt_reason(message, options=..., input=...)`
 
-Builds the structured reason Welt renders as a message with the specified widgets — choice buttons (`options`), a free-text field (`input`), or both. The specs are [the wire's own shapes](https://github.com/iwamot/welt/blob/main/docs/wire.md#interrupt); omitted fields keep Welt's defaults, and the reason is checked against Welt's schema before it is returned, so a typo raises here instead of reaching the thread as Welt's default rendering:
+Builds the structured reason Welt renders as a message with the specified widgets — choice buttons (`options`), a free-text field (`input`), or both. The specs are [the wire's own shapes](https://github.com/iwamot/welt/blob/main/docs/wire.md#interrupt), typed as `OptionSpec` and `InputSpec`, and omitted fields keep Welt's defaults:
 
 ```python
 answer = tool_context.interrupt(
@@ -95,6 +79,8 @@ answer = tool_context.interrupt(
     ),
 )
 ```
+
+Building the reason through this helper is what makes a typo an error. `ToolContext.interrupt` takes its `reason` as `Any`, so a dict literal handed to it directly is checked by nothing, and Welt's reaction to a reason it cannot match is its default **Approve** / **Deny** buttons — no error, no log, just widgets you did not ask for. The typed parameters catch a misspelled key before the run; the checks inside catch it in runs where no type checker was involved. What they check is the shape, not the size: how many buttons one Slack block holds, and how long a button value may be, are Welt's to enforce.
 
 ## Working with interrupts
 

@@ -1,6 +1,3 @@
-import pytest
-from jsonschema.exceptions import ValidationError
-
 from welt_io_strands import decode_interrupt_responses
 
 
@@ -24,17 +21,5 @@ def test_answer_order_is_preserved() -> None:
     ]
 
 
-@pytest.mark.parametrize(
-    "responses",
-    [
-        {},
-        [("i-1", "approve")],
-        "not a mapping",
-        {"i-1": 42},
-        {"i-1": None},
-        {"i-1": "y", "i-2": 42},
-    ],
-)
-def test_rejects_a_payload_that_violates_the_wire_contract(responses: object) -> None:
-    with pytest.raises(ValidationError):
-        decode_interrupt_responses(responses)
+def test_no_answers_decode_to_no_items() -> None:
+    assert decode_interrupt_responses({}) == []
