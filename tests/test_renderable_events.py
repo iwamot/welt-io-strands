@@ -1,5 +1,6 @@
 import asyncio
 import base64
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 
@@ -306,7 +307,9 @@ def test_a_file_the_source_only_points_at_stays_off_the_wire() -> None:
 # --- which tools the agent uploads from --------------------------------------
 
 
-def tool_result_with_a_file(tool_use_id: str = "id-1") -> list[dict]:
+def tool_result_with_a_file(
+    tool_use_id: str = "id-1", data: bytes = PNG_BYTES
+) -> list[dict]:
     """Build the stream of a tool that returned one image."""
     return [
         {
@@ -321,7 +324,7 @@ def tool_result_with_a_file(tool_use_id: str = "id-1") -> list[dict]:
                                 {
                                     "image": {
                                         "format": "png",
-                                        "source": {"bytes": PNG_BYTES},
+                                        "source": {"bytes": data},
                                     }
                                 }
                             ],
@@ -373,6 +376,41 @@ def test_a_file_with_no_bytes_stays_off_the_wire() -> None:
     ]
 
     assert rendered(events) == []
+
+
+def test_an_empty_file_is_logged_against_the_tool_that_returned_it(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    with caplog.at_level(logging.WARNING):
+        result = rendered(
+            tool_result_with_a_file(data=b""),
+            agent=agent_calling("id-1", "draw"),
+            files_from={"draw"},
+        )
+
+    assert result == [{"tool_result": {"toolUseId": "id-1", "status": "success"}}]
+    assert "draw" in caplog.text
+    assert "image.png" in caplog.text
+
+
+def test_an_empty_file_from_the_model_is_logged_against_the_model(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    events = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"image": {"format": "png", "source": {"bytes": b""}}},
+                ],
+            }
+        }
+    ]
+
+    with caplog.at_level(logging.WARNING):
+        assert rendered(events) == []
+
+    assert "the model" in caplog.text
 
 
 def test_tool_use_the_agent_does_not_know_uploads_nothing() -> None:
