@@ -19,7 +19,15 @@ classifiers = [
     "Topic :: Software Development",
     "Typing :: Typed",
 ]
-dependencies = []
+dependencies = [
+    # Not imported: this package reads the shapes Strands produces rather
+    # than the SDK itself. Declared anyway, because the two are always run
+    # together and this is the only place the supported floor can be
+    # stated. 1.13.0 is where `strands.interrupt` arrived, and the
+    # interrupts this adapter carries need it; the test suite passes from
+    # there up.
+    "strands-agents>=1.13.0",
+]
 
 [project.urls]
 Repository = "https://github.com/iwamot/welt-io-strands"
