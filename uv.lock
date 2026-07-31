@@ -1907,6 +1907,9 @@ wheels = [
 [[package]]
 name = "welt-io-strands"
 source = { editable = "." }
+dependencies = [
+    { name = "strands-agents" },
+]
 
 [package.dev-dependencies]
 dev = [
@@ -1919,6 +1922,7 @@ dev = [
 ]
 
 [package.metadata]
+requires-dist = [{ name = "strands-agents", specifier = ">=1.13.0" }]
 
 [package.metadata.requires-dev]
 dev = [

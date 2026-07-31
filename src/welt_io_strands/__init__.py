@@ -344,10 +344,9 @@ def _refuse_unknown_keys(value: dict, allowed: frozenset[str], subject: str) -> 
 class _Agent(Protocol):
     """What `renderable_events` reads from the Agent being streamed.
 
-    Strands' Agent is not a dependency of this package — an adapter that
-    imports the framework to read one attribute off it costs its callers a
-    dependency to say what a line of code already says. This names the
-    attribute instead, and an Agent satisfies it.
+    Importing the SDK to read one attribute off an Agent would say what a
+    line of code already says. This names the attribute instead, and an
+    Agent satisfies it.
     """
 
     messages: list
