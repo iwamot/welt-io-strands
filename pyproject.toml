@@ -41,6 +41,9 @@ dev = [
     # installed here so lint and type checks cover it against the local
     # library.
     "bedrock-agentcore==1.19.0",
+    # compatibility.sh reads the declared floors with it. Pinned even though it
+    # arrives through pytest, so CI names the version it uses.
+    "packaging==26.2",
     "pip-licenses==5.5.5",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
