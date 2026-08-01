@@ -15,6 +15,22 @@ uv add welt-io-strands
 
 See [`examples/agent`](examples/agent) — the smallest complete agent built on this package (text streaming, tool use, image generation, file output, file input, and human-approval tools), which doubles as the example for [Welt's Quick Start](https://github.com/iwamot/welt#quick-start). The sections below explain the adapters it wires in.
 
+## Supported Versions
+
+### Welt
+
+Welt releases first; welt-io-strands follows, mirroring the minor version. While both are 0.x, a welt-io-strands 0.Y release supports Welt v0.Y — other combinations may work, but come with no guarantee.
+
+### Strands Agents
+
+| Package | Installable | Version CI runs against |
+|---|---|---|
+| `strands-agents` | `>=1.13.0` | <!-- renovate: datasource=pypi depName=strands-agents --> `1.50.2` |
+
+Every push and pull request runs the suite at both ends of that range. That is best effort rather than a guarantee: the floor is where the suite was last seen to pass, so a later release may raise it, and no ceiling is declared at all.
+
+Something misbehaving inside that range is worth an [issue](https://github.com/iwamot/welt-io-strands/issues).
+
 ## API
 
 The wire between Welt and the agent is JSON, specified by [Welt's wire contract](https://github.com/iwamot/welt/blob/main/docs/wire.md) — plain Strands values do not fit it in either direction. Two functions adapt the inbound payload, two the outbound stream.
@@ -90,10 +106,6 @@ Building the reason through this helper is what makes a typo an error. `ToolCont
 - **Strands' ready-made [`HumanInTheLoop`](https://strandsagents.com/docs/user-guide/concepts/agents/interventions/human-in-the-loop/) intervention works over Welt as-is.** Its string reasons render with Welt's default **Approve** / **Deny** buttons, whose `y` / `n` values its default evaluator understands. Do not pass `ask`: both of its inline modes block the agent waiting for input that Slack can never deliver — the default interrupt/resume mode is the one Welt drives.
 - **Route stdio consent prompts through interrupts instead.** For strands-tools packages that gate themselves behind a stdio prompt, set `BYPASS_TOOL_CONSENT=true` and let `HumanInTheLoop` do the gating over Slack. The strands-tools `handoff_to_user` tool is likewise stdio-bound; a small interrupt-raising tool of your own is the replacement.
 - **Code before `interrupt` runs again on resume.** Strands re-executes the interrupted tool from its start, so whatever precedes an interrupt and must not run twice — side effects, or work that must match what the human approved — has to be skipped on the second pass. Memoizing on `tool_context.tool_use["toolUseId"]`, the same id on both passes, is enough: the cache lives in the same process as the interrupt state it pairs with. The [example agent](examples/agent)'s `sample_draft_report` shows the pattern.
-
-## Supported Versions
-
-Welt releases first; welt-io-strands follows, mirroring the minor version. While both are 0.x, a welt-io-strands 0.Y release supports Welt v0.Y — other combinations may work, but come with no guarantee.
 
 ## License
 
