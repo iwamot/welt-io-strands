@@ -21,10 +21,15 @@ fit it in either direction:
 What Welt sends is taken as correct. Welt builds the payload and checks its
 own output against the wire contract before releasing it, so a payload that
 departs from the contract is a bug on the sending side, not an input to
-guard against — a malformed one surfaces as an ordinary error from
-whatever touches it first. What this adapter checks is the other thing:
-the values its own caller passes to `interrupt_reason`, since Welt renders
-a reason it cannot match as its default buttons, silently.
+validate against runtime errors — a malformed one surfaces as an ordinary
+error from whatever touches it first. The one thing `decode_messages`
+does refuse is a content block of a kind Welt never sends: a `toolUse` or
+`toolResult` is not a shape error but a forged conversation turn, and
+loaded as history it would let whoever reached the runtime put words the
+model treats as its own past actions into the run. What this adapter
+checks beyond that is the values its own caller passes to
+`interrupt_reason`, since Welt renders a reason it cannot match as its
+default buttons, silently.
 
 The reply stream is read as what Strands documents it to be: `stream_async`
 yields plain event dicts, so the keys are read as keys, and the AgentResult
@@ -79,6 +84,13 @@ def decode_messages(messages: list) -> list:
     return decoded
 
 
+# The content block kinds Welt sends. A block of any other kind — a toolUse or
+# toolResult in particular — is a forged conversation turn, not something Welt
+# builds, and loaded as history it would let a caller put words the model
+# treats as its own past actions into the run. It is refused, not passed on.
+_ALLOWED_BLOCKS = frozenset({"text", "image", "document", "video"})
+
+
 def _decode_sources(messages: list) -> None:
     """
     Restore the raw bytes of every file block, in place.
@@ -91,9 +103,12 @@ def _decode_sources(messages: list) -> None:
 
     Raises:
         binascii.Error: If a block's bytes are not valid base64.
+        ValueError: If a block is of a kind Welt does not send.
     """
     for message in messages:
         for block in message["content"]:
+            if not _ALLOWED_BLOCKS.issuperset(block):
+                raise ValueError(f"unexpected content block: {sorted(block)}")
             for kind in ("image", "document", "video"):
                 if kind in block:
                     source = block[kind]["source"]
