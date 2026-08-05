@@ -40,7 +40,7 @@ dev = [
     # examples/agent is a standalone deployable; its dependencies are
     # installed here so lint and type checks cover it against the local
     # library.
-    "bedrock-agentcore==1.19.0",
+    "bedrock-agentcore==1.20.0",
     # compatibility.sh reads the declared floors with it. Pinned even though it
     # arrives through pytest, so CI names the version it uses.
     "packaging==26.3",
