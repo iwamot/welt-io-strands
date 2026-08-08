@@ -25,7 +25,7 @@ While both are 0.x, a welt-io-strands 0.Y release supports Welt v0.Y. From 1.0 o
 
 | Package | Installable | Version CI runs against |
 |---|---|---|
-| `strands-agents` | `>=1.13.0` | <!-- renovate: datasource=pypi depName=strands-agents --> `1.50.2` |
+| `strands-agents` | `>=1.13.0` | <!-- renovate: datasource=pypi depName=strands-agents --> `1.51.0` |
 
 Every push and pull request runs the suite at both ends of that range. That is best effort rather than a guarantee: the floor is where the suite was last seen to pass, so a later release may raise it, and no ceiling is declared at all.
 
