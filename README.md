@@ -82,7 +82,7 @@ Each event carries only what Welt reads. A `current_tool_use` is cut down to the
 
 #### `interrupt_reason(message, options=..., input=...)`
 
-Builds the structured reason Welt renders as a message with the specified widgets — choice buttons (`options`), a free-text field (`input`), or both. The specs are [the wire's own shapes](https://github.com/iwamot/welt/blob/main/docs/wire.md#interrupt), typed as `OptionSpec` and `InputSpec`, and omitted fields keep Welt's defaults:
+Builds the structured reason Welt renders as a message with the specified widgets — choice buttons (`options`), a free-text field (`input`), or both. An option's `value` is any JSON value, and the pressed button answers with it as it was declared; with neither widget the message renders as itself and Welt's default **Approve** / **Deny** buttons answer it. The specs are [the wire's own shapes](https://github.com/iwamot/welt/blob/main/docs/wire.md#interrupt), typed as `OptionSpec` and `InputSpec`, and omitted fields keep Welt's defaults:
 
 ```python
 answer = tool_context.interrupt(
@@ -90,8 +90,8 @@ answer = tool_context.interrupt(
     reason=interrupt_reason(
         "Deploy to prod?",
         [
-            {"value": "y", "label": "Deploy", "style": "primary"},
-            {"value": "n", "label": "Cancel"},
+            {"value": "Deploy", "style": "primary"},
+            {"value": "Cancel"},
         ],
         input={"label": "Or type your answer"},
     ),
@@ -105,7 +105,8 @@ Building the reason through this helper is what makes a typo an error. `ToolCont
 [Welt's Interrupts doc](https://github.com/iwamot/welt/blob/main/docs/interrupts.md) covers the Slack side: how each reason renders, who can answer, multiple questions, and expiry. On the Strands side:
 
 - **Prefix your interrupt names** (`myapp-deploy-approval`). Hook-raised interrupts must be unique across the whole event, tool-raised ones within their tool — a prefix keeps both as the agent grows.
-- **Strands' ready-made [`HumanInTheLoop`](https://strandsagents.com/docs/user-guide/concepts/agents/interventions/human-in-the-loop/) intervention works over Welt as-is.** Its string reasons render with Welt's default **Approve** / **Deny** buttons, whose `y` / `n` values its default evaluator understands. Do not pass `ask`: both of its inline modes block the agent waiting for input that Slack can never deliver — the default interrupt/resume mode is the one Welt drives.
+- **Gate your own tool with `interrupt()`, and everything else with [steering](https://strandsagents.com/docs/user-guide/concepts/agents/steering/).** A tool you wrote can ask for itself; a tool you did not — from strands-tools, or an MCP server — is gated from outside by a `SteeringHandler` returning `Interrupt`, which also puts the decision for every tool in one place. A handler cannot declare buttons, so its questions get Welt's default **Approve** / **Deny** buttons and it reads the boolean they answer with. The [example agent](examples/agent) gates `generate_image` this way.
+- **Strands' ready-made [`HumanInTheLoop`](https://strandsagents.com/docs/user-guide/concepts/agents/interventions/human-in-the-loop/) intervention works over Welt as-is.** Its string reasons render with Welt's default **Approve** / **Deny** buttons, and its default evaluator reads the `true` they answer with as approval. Do not pass `ask`: both of its inline modes block the agent waiting for input that Slack can never deliver — the default interrupt/resume mode is the one Welt drives.
 - **Route stdio consent prompts through interrupts instead.** For strands-tools packages that gate themselves behind a stdio prompt, set `BYPASS_TOOL_CONSENT=true` and let `HumanInTheLoop` do the gating over Slack. The strands-tools `handoff_to_user` tool is likewise stdio-bound; a small interrupt-raising tool of your own is the replacement.
 - **Code before `interrupt` runs again on resume.** Strands re-executes the interrupted tool from its start, so whatever precedes an interrupt and must not run twice — side effects, or work that must match what the human approved — has to be skipped on the second pass. Memoizing on `tool_context.tool_use["toolUseId"]`, the same id on both passes, is enough: the cache lives in the same process as the interrupt state it pairs with. The [example agent](examples/agent)'s `sample_draft_report` shows the pattern.
 
