@@ -7,8 +7,8 @@ fit it in either direction:
   slot of the Converse image/document/video blocks it builds from Slack
   uploads. `decode_messages` restores them before Strands (Bedrock
   Converse) sees the messages. Welt resumes an interrupted run with a
-  plain mapping of interrupt id to the chosen answer;
-  `decode_interrupt_responses` turns it into Strands' resume input.
+  mapping of interrupt id to the chosen answer and the widget it came
+  from; `decode_interrupt_responses` turns it into Strands' resume input.
 - Outbound, raw `stream_async` events carry values that are not
   JSON-serializable (the Agent itself, UUIDs, traces, raw file bytes), which
   the AgentCore Runtime SDK would degrade to a plain string on the SSE wire.
@@ -123,9 +123,14 @@ def decode_interrupt_responses(responses: dict) -> list:
     Decode Welt's interrupt answers into Strands' resume input.
 
     Welt resumes an interrupted run with a payload mapping each interrupt
-    id to the answer a human chose in the thread. Strands resumes from a
-    list of `interruptResponse` content items; the returned list feeds
-    `Agent.stream_async` directly.
+    id to the answer a human chose in the thread and the widget it came
+    from. Strands resumes from a list of `interruptResponse` content
+    items; the returned list feeds `Agent.stream_async` directly.
+
+    The answer travels on as the value it was given, since what it means
+    is for the interrupting tool to decide. The widget it came from is
+    Welt's own vocabulary, and a tool that reads its own option values
+    already knows which of them it declared.
 
     Args:
         responses (dict): The `interrupt_responses` value of Welt's
@@ -135,8 +140,13 @@ def decode_interrupt_responses(responses: dict) -> list:
         list: One `interruptResponse` item per answered interrupt.
     """
     return [
-        {"interruptResponse": {"interruptId": interrupt_id, "response": response}}
-        for interrupt_id, response in responses.items()
+        {
+            "interruptResponse": {
+                "interruptId": interrupt_id,
+                "response": answer["value"],
+            }
+        }
+        for interrupt_id, answer in responses.items()
     ]
 
 

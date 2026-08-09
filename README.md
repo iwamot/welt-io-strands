@@ -43,7 +43,7 @@ Returns a copy of Welt's Converse-shaped messages with the base64-encoded file b
 
 #### `decode_interrupt_responses(responses)`
 
-Turns Welt's resume payload — a mapping of interrupt id to the answer a human chose — into the `interruptResponse` items that `Agent.stream_async` resumes from.
+Turns Welt's resume payload — a mapping of interrupt id to the answer a human chose and the widget it came from — into the `interruptResponse` items that `Agent.stream_async` resumes from. The answer travels on as the value it was given; the widget it came from is Welt's vocabulary, and a tool that reads its own option values already knows which of them it declared.
 
 #### What arrives is taken as correct
 
