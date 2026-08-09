@@ -7,8 +7,8 @@ fit it in either direction:
   slot of the Converse image/document/video blocks it builds from Slack
   uploads. `decode_messages` restores them before Strands (Bedrock
   Converse) sees the messages. Welt resumes an interrupted run with a
-  plain mapping of interrupt id to the chosen answer;
-  `decode_interrupt_responses` turns it into Strands' resume input.
+  mapping of interrupt id to the chosen answer and the widget it came
+  from; `decode_interrupt_responses` turns it into Strands' resume input.
 - Outbound, raw `stream_async` events carry values that are not
   JSON-serializable (the Agent itself, UUIDs, traces, raw file bytes), which
   the AgentCore Runtime SDK would degrade to a plain string on the SSE wire.
@@ -123,9 +123,14 @@ def decode_interrupt_responses(responses: dict) -> list:
     Decode Welt's interrupt answers into Strands' resume input.
 
     Welt resumes an interrupted run with a payload mapping each interrupt
-    id to the answer a human chose in the thread. Strands resumes from a
-    list of `interruptResponse` content items; the returned list feeds
-    `Agent.stream_async` directly.
+    id to the answer a human chose in the thread and the widget it came
+    from. Strands resumes from a list of `interruptResponse` content
+    items; the returned list feeds `Agent.stream_async` directly.
+
+    The answer travels on as the value it was given, since what it means
+    is for the interrupting tool to decide. The widget it came from is
+    Welt's own vocabulary, and a tool that reads its own option values
+    already knows which of them it declared.
 
     Args:
         responses (dict): The `interrupt_responses` value of Welt's
@@ -135,15 +140,20 @@ def decode_interrupt_responses(responses: dict) -> list:
         list: One `interruptResponse` item per answered interrupt.
     """
     return [
-        {"interruptResponse": {"interruptId": interrupt_id, "response": response}}
-        for interrupt_id, response in responses.items()
+        {
+            "interruptResponse": {
+                "interruptId": interrupt_id,
+                "response": answer["value"],
+            }
+        }
+        for interrupt_id, answer in responses.items()
     ]
 
 
 class OptionSpec(TypedDict):
     """One button of a structured interrupt reason."""
 
-    value: str
+    value: object
     label: NotRequired[str]
     style: NotRequired[Literal["primary", "danger"]]
 
@@ -173,6 +183,8 @@ def interrupt_reason(
     (`options`), a free-text field whose submitted text becomes the
     interrupt's response (`input`), or both — whichever answer comes
     first, a pressed button or the submitted text, settles the question.
+    With neither, the message renders as itself and Welt's default
+    Approve / Deny buttons answer it.
 
     Building the reason through this helper is what makes a typo an error.
     `ToolContext.interrupt` takes its `reason` as `Any`, so a dict literal
@@ -190,10 +202,11 @@ def interrupt_reason(
     Args:
         message (str): The text Welt shows above the widgets.
         options (Sequence[OptionSpec] | None): One dict per button: a
-            required `value` (what the interrupting tool receives as the
-            response when the button is pressed), an optional `label` (the
-            button text; omitted, Welt shows the value), and an optional
-            `style` ("primary" or "danger").
+            required `value` (any JSON value, which the interrupting tool
+            receives as the response when the button is pressed), an
+            optional `label` (the button text; omitted, Welt shows the
+            value), and an optional `style` ("primary" or "danger").
+            None omits the buttons.
         input (InputSpec | None): The free-text field: an optional `label`
             (the field's label) and an optional `multiline` (whether the
             field accepts multiple lines) — `{}` takes Welt's defaults for
@@ -204,11 +217,8 @@ def interrupt_reason(
 
     Raises:
         TypeError: If a value is of the wrong type.
-        ValueError: If a key is unknown, a required string is empty, or the
-            reason specifies no widget at all.
+        ValueError: If a key is unknown or a required string is empty.
     """
-    if options is None and input is None:
-        raise ValueError("a reason needs options, input, or both")
     reason: dict = {"message": _checked_message(message)}
     if options is not None:
         reason["options"] = _checked_options(options)
@@ -272,22 +282,20 @@ def _checked_option(option: object) -> dict:
 
     Raises:
         TypeError: If it, or one of its values, is of the wrong type.
-        ValueError: If it carries an unknown key, an empty `value` or
+        ValueError: If it carries an unknown key, no `value`, an empty
             `label`, or a style Welt does not render.
     """
     if not isinstance(option, dict):
         raise TypeError(f"an option must be a dict, not {type(option).__name__}")
     _refuse_unknown_keys(option, _OPTION_KEYS, "an option")
+    # Only presence is checked: an option's value is whatever JSON value
+    # the tool wants back, and nothing about it is a typo to catch.
     if "value" not in option:
         raise ValueError("an option needs a value")
-    value = option.get("value")
-    if not isinstance(value, str):
-        raise TypeError(f"an option's value must be a str, not {type(value).__name__}")
-    if not value:
-        raise ValueError("an option's value must not be empty")
-    # Read by presence, the way `value` above is: a key carrying None
-    # reaches Welt as a null, which Welt reads as a malformed field rather
-    # than an omitted one and answers with its default buttons instead.
+    # `label` and `style` are read by presence instead of by None, since a
+    # key carrying None reaches Welt as a null, which Welt reads as a
+    # malformed field rather than an omitted one and answers with its
+    # default buttons instead.
     if "label" in option:
         label = option.get("label")
         if not isinstance(label, str):
