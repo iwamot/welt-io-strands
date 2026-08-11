@@ -8,7 +8,7 @@ The example agent for [Welt](https://github.com/iwamot/welt)'s [Quick Start](htt
 |---------|------|
 | [Bedrock AgentCore SDK](https://github.com/aws/bedrock-agentcore-sdk-python) | Serves the endpoint |
 | [Strands Agents SDK](https://strandsagents.com/) | Runs the model and the tools |
-| [Strands Agents Tools](https://github.com/strands-agents/tools) | Provides the `current_time` and `generate_image` tools |
+| [Strands Agents Tools](https://github.com/strands-agents/tools) | Provides the `generate_image` tool |
 | welt-io-strands | Adapts the wire to Welt |
 
 ## Run Locally
@@ -46,7 +46,7 @@ The agent uses the Strands default model — currently an Anthropic Claude model
 
 ## Tools
 
-- [`current_time`](https://github.com/strands-agents/tools/blob/main/src/strands_tools/current_time.py) — the minimal tool: plain text streaming, nothing else. Ask "what time is it?" to see tool use in the thread.
+- `current_time` — the minimal tool: plain text streaming, nothing else. Ask "what time is it?" to see tool use in the thread.
 - [`generate_image`](https://github.com/strands-agents/tools/blob/main/src/strands_tools/generate_image.py) — returns the image as a tool-result block, which the model sees and welt-io-strands turns into a file upload. Ask it to draw something.
 - `create_sample_file` — writes a small CSV and returns it as a document block, which the model reads and Welt uploads to the thread. Its name carries a random tail (`sample-3f2a1b9c.csv`) because a document's name has to be unique across the run. Ask it for a sample file.
 - `sample_dangerous_action` — a pretend dangerous action (no side effects, no extra AWS permissions) that pauses for human approval: Welt renders the pause as **Approve** / **Cancel** buttons plus a free-text field in the Slack thread, and whichever answer comes first — a press, or typed text — resumes the run. Ask "deploy to prod", then press a button or type something like "not now". See [Welt's Interrupts doc](https://github.com/iwamot/welt/blob/main/docs/interrupts.md) for the round trip.

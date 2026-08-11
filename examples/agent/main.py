@@ -26,7 +26,7 @@ from strands.vended_plugins.steering import (
     SteeringHandler,
     ToolSteeringAction,
 )
-from strands_tools import current_time, generate_image
+from strands_tools import generate_image
 
 from welt_io_strands import (
     decode_interrupt_responses,
@@ -49,6 +49,17 @@ app = BedrockAgentCoreApp()
 # it). No persistence either — the slot lives and dies with the session's
 # microVM (recycled on idle timeout, 8 hours at most).
 _interrupted_agent: Agent | None = None
+
+
+@tool
+def current_time() -> str:
+    """
+    Get the current date and time.
+
+    Returns:
+        str: The current UTC time in ISO 8601 format.
+    """
+    return datetime.now(UTC).isoformat()
 
 
 def _document_name(stem: str) -> str:
