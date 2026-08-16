@@ -50,6 +50,7 @@ except ImportError:
     __version__ = "0.0.0+unknown"
 
 __all__ = [
+    "DecisionSpec",
     "InputSpec",
     "OptionSpec",
     "decode_interrupt_responses",
@@ -158,6 +159,13 @@ class OptionSpec(TypedDict):
     style: NotRequired[Literal["primary", "danger"]]
 
 
+class DecisionSpec(TypedDict):
+    """The look of the approve or reject button, which Welt words itself."""
+
+    label: NotRequired[str]
+    style: NotRequired[Literal["primary", "danger"]]
+
+
 class InputSpec(TypedDict):
     """The free-text field of a structured interrupt reason."""
 
@@ -166,6 +174,7 @@ class InputSpec(TypedDict):
 
 
 _OPTION_KEYS = frozenset({"value", "label", "style"})
+_DECISION_KEYS = frozenset({"label", "style"})
 _INPUT_KEYS = frozenset({"label", "multiline"})
 _STYLES = frozenset({"primary", "danger"})
 
@@ -174,25 +183,29 @@ def interrupt_reason(
     message: str,
     options: Sequence[OptionSpec] | None = None,
     *,
+    approve: DecisionSpec | None = None,
+    reject: DecisionSpec | None = None,
     input: InputSpec | None = None,
 ) -> dict:
     """
     Build an interrupt reason that Welt renders as the specified widgets.
 
-    Welt renders this shape as `message` followed by one button per option
-    (`options`), a free-text field whose submitted text becomes the
-    interrupt's response (`input`), or both — whichever answer comes
-    first, a pressed button or the submitted text, settles the question.
-    With neither, the message renders as itself and Welt's default
-    Approve / Deny buttons answer it.
+    Welt renders this shape as `message` followed by the widgets the
+    remaining arguments ask for: the approve and reject buttons Welt words
+    and values itself (`approve`, `reject`), one button per option
+    (`options`), and a free-text field whose submitted text becomes the
+    interrupt's response (`input`). They combine — whichever answer comes
+    first, a pressed button or the submitted text, settles the question —
+    and with none of them the message renders as itself and Welt's default
+    buttons answer it.
 
     Building the reason through this helper is what makes a typo an error.
     `ToolContext.interrupt` takes its `reason` as `Any`, so a dict literal
     handed to it directly is checked by nothing, and Welt's reaction to a
-    reason it cannot match is its default Approve / Deny buttons — no
-    error, no log, just widgets the author did not ask for. The typed
-    parameters here catch a misspelled key before the run, and the checks
-    below catch it in runs where no type checker was involved.
+    reason it cannot match is its default buttons — no error, no log, just
+    widgets the author did not ask for. The typed parameters here catch a
+    misspelled key before the run, and the checks below catch it in runs
+    where no type checker was involved.
 
     What is checked is the shape, not the size: Welt's own rendering caps
     (how many buttons one Slack block holds, how long a button value may
@@ -207,6 +220,12 @@ def interrupt_reason(
             optional `label` (the button text; omitted, Welt shows the
             value), and an optional `style` ("primary" or "danger").
             None omits the buttons.
+        approve (DecisionSpec | None): The approve button, which the
+            interrupting tool receives as `True`: an optional `label` and
+            an optional `style` — `{}` takes Welt's own wording. None
+            omits the button.
+        reject (DecisionSpec | None): The reject button, received as
+            `False`, in the same shape as `approve`.
         input (InputSpec | None): The free-text field: an optional `label`
             (the field's label) and an optional `multiline` (whether the
             field accepts multiple lines) — `{}` takes Welt's defaults for
@@ -220,11 +239,47 @@ def interrupt_reason(
         ValueError: If a key is unknown or a required string is empty.
     """
     reason: dict = {"message": _checked_message(message)}
+    if approve is not None:
+        reason["approve"] = _checked_decision(approve, "approve")
+    if reject is not None:
+        reason["reject"] = _checked_decision(reject, "reject")
     if options is not None:
         reason["options"] = _checked_options(options)
     if input is not None:
         reason["input"] = _checked_input(input)
     return reason
+
+
+def _checked_decision(spec: object, subject: str) -> dict:
+    """
+    Check the look of the approve or reject button.
+
+    Args:
+        spec (object): The spec the caller passed.
+        subject (str): The argument's name, for the error messages.
+
+    Returns:
+        dict: The spec.
+
+    Raises:
+        TypeError: If it, or one of its values, is of the wrong type.
+        ValueError: If it carries an unknown key, an empty `label`, or a
+            style Welt does not render.
+    """
+    if not isinstance(spec, dict):
+        raise TypeError(f"{subject} must be a dict, not {type(spec).__name__}")
+    _refuse_unknown_keys(spec, _DECISION_KEYS, subject)
+    if "label" in spec:
+        label = spec.get("label")
+        if not isinstance(label, str):
+            raise TypeError(
+                f"{subject}'s label must be a str, not {type(label).__name__}"
+            )
+        if not label:
+            raise ValueError(f"{subject}'s label must not be empty")
+    if "style" in spec and spec.get("style") not in _STYLES:
+        raise ValueError(f"{subject}'s style must be one of {sorted(_STYLES)}")
+    return spec
 
 
 def _checked_message(message: object) -> str:

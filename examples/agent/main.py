@@ -129,16 +129,14 @@ def sample_dangerous_action(tool_context: ToolContext, action: str) -> str:
         "example-dangerous-action-approval",
         reason=interrupt_reason(
             f"May I run this dangerous action? — {action}",
-            [
-                {"value": "Approve", "style": "primary"},
-                {"value": "Cancel"},
-            ],
+            approve={},
+            reject={"label": "Cancel"},
             input={"label": "Or type your answer"},
         ),
     )
-    if answer == "Approve":
+    if answer is True:
         return f"Ran: {action}. (This example doesn't actually run anything.)"
-    if answer == "Cancel":
+    if answer is False:
         return "The action was cancelled by the user."
     return f"The action was not run. The user answered: {answer}"
 
@@ -241,7 +239,7 @@ class ApprovalSteering(SteeringHandler):
     is given.
 
     The reason is a plain message: a handler cannot declare buttons, so Welt
-    answers it with the default Approve / Deny buttons, and the plugin reads
+    answers it with the default buttons, and the plugin reads
     the answer (a boolean) rather than this agent. What the human needs in
     order to decide has to travel in the message, which is why the prompt
     goes into it.
