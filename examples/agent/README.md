@@ -24,7 +24,11 @@ MODEL_ID=global.anthropic.claude-sonnet-4-6 \
   --with "botocore[crt]" main.py
 ```
 
-The process needs AWS credentials the standard SDK way — environment variables, `AWS_PROFILE`, an SSO session, `aws login` (which is why `botocore[crt]` is included) — because the model still runs on Amazon Bedrock. `MODEL_ID` takes any Converse model with access enabled in the Amazon Bedrock console, in the region your credentials point at; unset, the agent falls back to the Strands default model — currently the same `global.anthropic.claude-sonnet-4-6`. To try image generation too, also enable access for the Stability AI image models, in us-west-2 — the `generate_image` tool defaults to Stable Image Core but may pick another.
+The process needs AWS credentials the standard SDK way — environment variables, `AWS_PROFILE`, an SSO session, `aws login` (which is why `botocore[crt]` is included) — because the model still runs on Amazon Bedrock.
+
+`MODEL_ID` takes any Converse model with access enabled in the Amazon Bedrock console, in the region your credentials point at; unset, the agent falls back to the Strands default model — currently the same `global.anthropic.claude-sonnet-4-6`. The model is built in one place near the top of `main.py`: `BedrockModel`, which speaks Converse to bedrock-runtime. Two commented-out lines next to it swap in `OpenAIResponsesModel`, which speaks the Responses API to bedrock-mantle, Bedrock's OpenAI-compatible endpoint, instead.
+
+To try image generation too, also enable access for the Stability AI image models, in us-west-2 — the `generate_image` tool defaults to Stable Image Core but may pick another.
 
 One difference from the cloud: AgentCore Runtime gives every session its own microVM, while the local server is a single process for all sessions — the agent stashes an interrupted run in one slot, so keep interrupt experiments to one thread at a time.
 

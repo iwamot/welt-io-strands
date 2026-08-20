@@ -19,6 +19,7 @@ from uuid import uuid4
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from strands import Agent, ToolContext, tool
+from strands.models import BedrockModel
 from strands.types.tools import ToolUse
 from strands.vended_plugins.steering import (
     Interrupt,
@@ -40,6 +41,18 @@ from welt_io_strands import (
 os.chdir(tempfile.gettempdir())
 
 app = BedrockAgentCoreApp()
+
+# The model is the one place that decides which Bedrock endpoint and API the
+# agent talks to; nothing else in this file depends on that choice.
+# BedrockModel speaks Converse to bedrock-runtime, so MODEL_ID takes any
+# Converse model there (unset: the Strands default).
+_model_id = os.environ.get("MODEL_ID")
+model = BedrockModel(model_id=_model_id) if _model_id else BedrockModel()
+# For bedrock-mantle, Bedrock's OpenAI-compatible endpoint, swap in the
+# Responses API provider from `strands-agents[openai]` instead (the region
+# comes from the environment, like above):
+# from strands.models import OpenAIResponsesModel
+# model = OpenAIResponsesModel(model_id=_model_id, bedrock_mantle_config={})
 
 # Where an interrupted Agent waits for its answers. One slot is enough:
 # AgentCore Runtime runs each session in its own microVM, so this process
@@ -308,8 +321,7 @@ async def invoke(payload: dict) -> AsyncIterator[dict]:
         # the KeyError it raises is reported as an `error` event by the SDK.
         messages = decode_messages(payload["messages"])
         agent = Agent(
-            # Any Converse model; unset falls back to the Strands default.
-            model=os.environ.get("MODEL_ID"),
+            model=model,
             tools=[
                 current_time,
                 generate_image,
