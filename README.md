@@ -14,7 +14,21 @@ uv add welt-io-strands
 
 ## Usage
 
-See [`examples/agent`](examples/agent) — the smallest complete agent built on this package (text streaming, tool use, image generation, file output, file input, and human-approval tools), which doubles as the example for [Welt's Quick Start](https://github.com/iwamot/welt#quick-start). The sections below explain the adapters it wires in.
+`welt_agent` builds the whole AgentCore Runtime entrypoint for an agent Welt drives, so a deployable is your agent plus one mount line:
+
+```python
+from bedrock_agentcore.runtime import BedrockAgentCoreApp
+from strands import Agent
+from welt_io_strands.agentcore import welt_agent
+
+app = BedrockAgentCoreApp()
+app.entrypoint(welt_agent(lambda: Agent(callback_handler=None)))
+
+if __name__ == "__main__":
+    app.run()
+```
+
+See [`examples/agent`](examples/agent) for the full version — the smallest complete agent built on this package (text streaming, tool use, image generation, file output, file input, and human-approval tools), which doubles as the example for [Welt's Quick Start](https://github.com/iwamot/welt#quick-start). The sections below cover the entrypoint and the adapters it wires in.
 
 ## Supported Versions
 
@@ -32,7 +46,19 @@ Something misbehaving inside that range is worth an [issue](https://github.com/i
 
 ## API
 
-The wire between Welt and the agent is JSON, specified by [Welt's wire contract](https://github.com/iwamot/welt/blob/main/docs/wire.md) — plain Strands values do not fit it in either direction. Two functions adapt the inbound payload, two the outbound stream.
+The wire between Welt and the agent is JSON, specified by [Welt's wire contract](https://github.com/iwamot/welt/blob/main/docs/wire.md) — plain Strands values do not fit it in either direction. Two functions adapt the inbound payload, two the outbound stream. `welt_agent` wires the three of them the entrypoint needs (`interrupt_reason` serves the tools themselves); reach for the pieces directly when your entrypoint needs a shape of its own.
+
+### Entrypoint
+
+#### `welt_agent(new_agent, files_from=...)`
+
+Builds the entrypoint `BedrockAgentCoreApp` serves. It reads which envelope Welt sent — Converse-shaped `messages` for a conversation turn, `interrupt_responses` for the answers that resume an interrupted run — drives the agent, and yields the events Welt renders.
+
+Every turn runs on a fresh Agent from `new_agent`: the Slack thread is the source of truth for conversation history, and the messages Welt sends carry it whole. An interrupted Agent waits inside the entrypoint for its answers — one slot, resume-only, living and dying with the session's microVM (recycled on idle timeout, 8 hours at most); resuming after that raises, which Welt renders as its resume-failure notice. `files_from` passes through to `renderable_events` below.
+
+#### `send_file(name, data)`
+
+Queues one file for the Slack thread from inside a tool, riding the wire beside the reply being streamed. The model never sees it — a tool whose file matters to the conversation says what it holds in its result, or returns it as a content block and is named in `files_from`, which puts it in front of the model and on the thread both. Every turn starts with the queue empty, so a file a failed turn left behind never rides a later reply, and an empty name or empty bytes is refused where the tool is still on the stack — Slack refuses a zero-byte upload, and the whole reply fails with it.
 
 ### Inbound
 
