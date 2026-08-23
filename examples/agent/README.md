@@ -41,6 +41,9 @@ agentcore create --name WeltExample --framework Strands --model-provider Bedrock
 cd WeltExample
 
 curl -o app/WeltExample/main.py https://raw.githubusercontent.com/iwamot/welt-io-strands/main/examples/agent/main.py
+
+# the template's requires-python floor sits below welt-io-strands'
+sed -i.bak 's/requires-python = ">=3.10"/requires-python = ">=3.12"/' app/WeltExample/pyproject.toml && rm app/WeltExample/pyproject.toml.bak
 uv add --project app/WeltExample welt-io-strands strands-agents-tools
 
 agentcore deploy
