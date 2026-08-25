@@ -3,10 +3,13 @@
 Receives Welt's payload, feeds it to a Strands agent, and streams back the
 renderable subset of its `stream_async` events — the AgentCore Runtime SDK
 emits each one as SSE, which Welt (https://github.com/iwamot/welt) renders
-into Slack. `welt_agent` is the whole connection: it reads which envelope
-Welt sent (a conversation turn, or the answers that resume an interrupted
-run), drives the agent, and keeps an interrupted run until its answers
-arrive.
+into Slack. `start_reply` reads which envelope Welt sent (a conversation
+turn, or the answers that resume an interrupted run), decodes it, and
+streams the Agent this file hands it; `renderable_events` reduces what it
+streams.
+
+Which Agent that is, this file decides — including keeping an interrupted
+run until its buttons are answered, below.
 
 This example is a standalone deployable; Welt drives it only through the
 JSON wire contract, which welt-io-strands adapts in both directions.
@@ -14,6 +17,7 @@ JSON wire contract, which welt-io-strands adapts in both directions.
 
 import os
 import tempfile
+from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
 from uuid import uuid4
 
@@ -29,8 +33,7 @@ from strands.vended_plugins.steering import (
 )
 from strands_tools import generate_image
 
-from welt_io_strands import interrupt_reason
-from welt_io_strands.agentcore import welt_agent
+from welt_io_strands import interrupt_reason, renderable_events, start_reply
 
 # generate_image saves each image under ./output as a side effect, and the
 # temp dir is the writable path in the AgentCore Runtime container.
@@ -41,9 +44,11 @@ app = BedrockAgentCoreApp()
 # The model is the one place that decides which Bedrock endpoint and API the
 # agent talks to; nothing else in this file depends on that choice.
 # BedrockModel speaks Converse to bedrock-runtime, so MODEL_ID takes any
-# Converse model there (unset: the Strands default).
-_model_id = os.environ.get("MODEL_ID")
-model = BedrockModel(model_id=_model_id) if _model_id else BedrockModel()
+# Converse model there. An empty MODEL_ID means unset, like Welt's own
+# variables.
+model = BedrockModel(
+    model_id=os.environ.get("MODEL_ID") or "global.anthropic.claude-sonnet-4-6"
+)
 # For bedrock-mantle, Bedrock's OpenAI-compatible endpoint, swap in the
 # Responses API provider from `strands-agents[openai]` instead (the region
 # comes from the environment, like above):
@@ -276,13 +281,50 @@ class ApprovalSteering(SteeringHandler):
 _FILES_FROM = {"generate_image", "create_sample_file", "sample_draft_report"}
 
 
+# The Agents whose runs stopped for human input, under the ids of the
+# interrupts they raised. Welt sends those ids back when the buttons are
+# answered, and the run they belong to is the one that can be resumed. An
+# entry lives as long as this process: AgentCore Runtime gives each session
+# its own microVM, so a resume that arrives after it was recycled finds
+# nothing and raises, which Welt renders as its resume-failure notice.
+_interrupted: dict[str, Agent] = {}
+
+
+def _resumed(answers: Mapping[str, object]) -> Agent:
+    """
+    Take the held run the answered interrupts belong to.
+
+    A stop's questions are answered together, so every id in one payload
+    names the same run — and the whole stop leaves the map with that run,
+    so every id holding it is dropped here. An answered id no longer held
+    means this process lost the run, and there is nothing to resume.
+
+    Args:
+        answers (Mapping[str, object]): Welt's `interrupt_responses`,
+            keyed by interrupt id.
+
+    Returns:
+        Agent: The run the answers name.
+
+    Raises:
+        RuntimeError: If no answered id is held.
+    """
+    held_id = next((i for i in answers if i in _interrupted), None)
+    if held_id is None:
+        raise RuntimeError("No interrupted agent to resume in this session.")
+    agent = _interrupted[held_id]
+    for interrupt_id in [i for i, held in _interrupted.items() if held is agent]:
+        del _interrupted[interrupt_id]
+    return agent
+
+
 def new_agent() -> Agent:
     """
     Build the Agent of one conversation turn.
 
     Returns:
-        Agent: A fresh Agent — `welt_agent` calls this on every turn, so
-            each turn runs on the messages Welt sends and nothing else.
+        Agent: A fresh Agent — a conversation turn runs on the messages
+            Welt sends and nothing else.
     """
     return Agent(
         model=model,
@@ -298,7 +340,32 @@ def new_agent() -> Agent:
     )
 
 
-app.entrypoint(welt_agent(new_agent, files_from=_FILES_FROM))
+@app.entrypoint
+async def invoke(payload: dict) -> AsyncIterator[dict]:
+    """
+    Stream a reply to the conversation or approval answers Welt sent.
+
+    Args:
+        payload (dict): Welt's invocation payload.
+
+    Yields:
+        dict: The events Welt renders.
+
+    Raises:
+        RuntimeError: If the answers name no interrupted run this process
+            still holds.
+    """
+    if "interrupt_responses" in payload:
+        agent = _resumed(payload["interrupt_responses"])
+    else:
+        agent = new_agent()
+
+    stream = start_reply(agent, payload)
+    async for event in renderable_events(stream, agent=agent, files_from=_FILES_FROM):
+        interrupt = event.get("interrupt")
+        if interrupt is not None:
+            _interrupted[interrupt["id"]] = agent
+        yield event
 
 
 if __name__ == "__main__":

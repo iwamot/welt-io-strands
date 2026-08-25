@@ -9,6 +9,9 @@ fit it in either direction:
   Converse) sees the messages. Welt resumes an interrupted run with a
   mapping of interrupt id to the chosen answer and the widget it came
   from; `decode_interrupt_responses` turns it into Strands' resume input.
+  `start_reply` is this direction whole: it reads which envelope Welt
+  sent, decodes it with the matching decoder, and starts the run on the
+  Agent the caller passes — it holds nothing itself.
 - Outbound, raw `stream_async` events carry values that are not
   JSON-serializable (the Agent itself, UUIDs, traces, raw file bytes), which
   the AgentCore Runtime SDK would degrade to a plain string on the SSE wire.
@@ -57,6 +60,7 @@ __all__ = [
     "decode_messages",
     "interrupt_reason",
     "renderable_events",
+    "start_reply",
 ]
 
 logger = logging.getLogger(__name__)
@@ -691,3 +695,55 @@ def _file_name(kind: str, media: dict) -> str:
     if not file_format:
         return base
     return f"{base}.{_EXTENSION_BY_FORMAT.get(file_format, file_format)}"
+
+
+class _StreamingAgent(Protocol):
+    """What `start_reply` streams: the Agent's streaming face.
+
+    Importing the SDK to name the Agent would say what one method already
+    says. This names it instead, and an Agent satisfies it.
+    """
+
+    def stream_async(self, prompt: list) -> AsyncIterator[dict]:
+        """Stream the agent's reply to a prompt."""
+        ...
+
+
+def start_reply(agent: _StreamingAgent, payload: dict) -> AsyncIterator[dict]:
+    """
+    Start the stream that replies to the payload Welt sent.
+
+    The inbound half of the wiring every deployable needs: it reads which
+    envelope Welt sent — Converse-shaped `messages` for a conversation
+    turn, `interrupt_responses` for the answers that resume an interrupted
+    run — decodes it, and streams the agent on the result. Pass what comes
+    back to `renderable_events` for the outbound half::
+
+        stream = start_reply(agent, payload)
+        async for event in renderable_events(stream, agent=agent):
+            yield event
+
+    Which Agent to stream stays with the caller, and so does whatever it
+    takes to answer that question. A conversation turn runs on a fresh
+    Agent, because the Slack thread is the source of truth for
+    conversation history and the messages Welt sends carry it whole; a
+    resume runs on the Agent that raised the interrupt, which the caller
+    kept — under the interrupt ids Welt sends back, in a Strands session
+    manager, or however else suits the agent. Nothing is held here.
+
+    Args:
+        agent (Agent): The Agent to stream this reply on.
+        payload (dict): The invocation payload, carrying one of the two
+            envelopes. What Welt sends is taken as correct, so a payload
+            carrying neither is Welt's bug, and the KeyError it raises is
+            reported as an `error` event by the AgentCore Runtime SDK.
+
+    Returns:
+        AsyncIterator[dict]: The agent's raw `stream_async` events, for
+            `renderable_events` to reduce.
+    """
+    if "interrupt_responses" in payload:
+        prompt = decode_interrupt_responses(payload["interrupt_responses"])
+    else:
+        prompt = decode_messages(payload["messages"])
+    return agent.stream_async(prompt)
