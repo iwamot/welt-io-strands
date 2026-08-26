@@ -19,14 +19,15 @@ Fetch the agent and run it with [uv](https://docs.astral.sh/uv/):
 
 ```sh
 curl -O https://raw.githubusercontent.com/iwamot/welt-io-strands/main/examples/agent/main.py
-MODEL_ID=global.anthropic.claude-sonnet-4-6 \
-  uv run --with bedrock-agentcore --with strands-agents-tools --with welt-io-strands \
+uv run --with bedrock-agentcore --with strands-agents-tools --with welt-io-strands \
   --with "botocore[crt]" main.py
 ```
 
 The process needs AWS credentials the standard SDK way — environment variables, `AWS_PROFILE`, an SSO session, `aws login` (which is why `botocore[crt]` is included) — because the model still runs on Amazon Bedrock.
 
-`MODEL_ID` takes any Converse model with access enabled in the Amazon Bedrock console, in the region your credentials point at; unset, the agent uses `global.anthropic.claude-sonnet-4-6`. The model is built in one place near the top of `main.py`: `BedrockModel`, which speaks Converse to bedrock-runtime. Two commented-out lines next to it swap in `OpenAIResponsesModel`, which speaks the Responses API to bedrock-mantle, Bedrock's OpenAI-compatible endpoint, instead.
+`MODEL_ID` takes any Converse model with access enabled in the Amazon Bedrock console; unset, the agent uses `global.anthropic.claude-sonnet-4-6`. The model is built in one place near the top of `main.py`: `BedrockModel`, which speaks Converse to bedrock-runtime. Two commented-out lines next to it swap in `OpenAIResponsesModel`, which speaks the Responses API to bedrock-mantle, Bedrock's OpenAI-compatible endpoint, instead.
+
+`BEDROCK_REGION` sends the model calls to a region of their own — useful locally, when the model access you want is not where your credentials point. Unset, `BedrockModel` resolves one the AWS SDK way: `AWS_DEFAULT_REGION`, then the profile's own `region`, then `AWS_REGION`, then `us-west-2` when nothing names one.
 
 To try image generation too, also enable access for the Stability AI image models, in us-west-2 — the `generate_image` tool defaults to Stable Image Core but may pick another.
 
@@ -49,7 +50,7 @@ uv add --project app/WeltExample welt-io-strands strands-agents-tools
 agentcore deploy
 ```
 
-The agent uses `global.anthropic.claude-sonnet-4-6`, so enable access for it in the Amazon Bedrock console, in the region you deployed to, or point the `MODEL_ID` environment variable at another Converse model. To try image generation too, also enable access for the Stability AI image models, in us-west-2 — the `generate_image` tool defaults to Stable Image Core but may pick another. `agentcore status` reports the agent runtime ARN: Welt's `AGENT_ARN` points at it.
+The agent uses `global.anthropic.claude-sonnet-4-6`, so enable access for it in the Amazon Bedrock console, in the region you deployed to, or point the `MODEL_ID` environment variable at another Converse model — and `BEDROCK_REGION` at another region, to leave the model access where it already is. To try image generation too, also enable access for the Stability AI image models, in us-west-2 — the `generate_image` tool defaults to Stable Image Core but may pick another. `agentcore status` reports the agent runtime ARN: Welt's `AGENT_ARN` points at it.
 
 The CLI has no teardown command — removing the deployment means deleting the CloudFormation stack it created, `AgentCore-WeltExample-default`.
 
