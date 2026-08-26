@@ -14,21 +14,32 @@ uv add welt-io-strands
 
 ## Usage
 
-`welt_agent` builds the whole AgentCore Runtime entrypoint for an agent Welt drives, so a deployable is your agent plus one mount line:
+`start_reply` and `renderable_events` are the wiring between Welt's payload and a Strands agent, so a deployable is your agent plus a short entrypoint:
 
 ```python
+from collections.abc import AsyncIterator
+
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from strands import Agent
-from welt_io_strands.agentcore import welt_agent
+from welt_io_strands import renderable_events, start_reply
 
 app = BedrockAgentCoreApp()
-app.entrypoint(welt_agent(lambda: Agent(callback_handler=None)))
+
+
+@app.entrypoint
+async def invoke(payload: dict) -> AsyncIterator[dict]:
+    agent = Agent(callback_handler=None)
+    async for event in renderable_events(start_reply(agent, payload), agent=agent):
+        yield event
+
 
 if __name__ == "__main__":
     app.run()
 ```
 
-See [`examples/agent`](examples/agent) for the full version — the smallest complete agent built on this package (text streaming, tool use, image generation, file output, file input, and human-approval tools), which doubles as the example for [Welt's Quick Start](https://github.com/iwamot/welt#quick-start). The sections below cover the entrypoint and the adapters it wires in.
+The Agent is yours to choose, one payload at a time. An agent with approval tools keeps the interrupted runs it needs to resume; [`examples/agent`](examples/agent) shows that as a map in `main.py`, filled as interrupts stream out and emptied when their answers arrive.
+
+See [`examples/agent`](examples/agent) for the full version — the smallest complete agent built on this package (text streaming, tool use, image generation, file output, file input, and human-approval tools), which doubles as the example for [Welt's Quick Start](https://github.com/iwamot/welt#quick-start). The sections below cover `start_reply` and the adapters it wires in.
 
 ## Supported Versions
 
@@ -46,19 +57,15 @@ Something misbehaving inside that range is worth an [issue](https://github.com/i
 
 ## API
 
-The wire between Welt and the agent is JSON, specified by [Welt's wire contract](https://github.com/iwamot/welt/blob/main/docs/wire.md) — plain Strands values do not fit it in either direction. Two functions adapt the inbound payload, two the outbound stream. `welt_agent` wires the three of them the entrypoint needs (`interrupt_reason` serves the tools themselves); reach for the pieces directly when your entrypoint needs a shape of its own.
+The wire between Welt and the agent is JSON, specified by [Welt's wire contract](https://github.com/iwamot/welt/blob/main/docs/wire.md) — plain Strands values do not fit it in either direction. Two functions adapt the inbound payload, two the outbound stream. `start_reply` wires the inbound pair into a stream (`interrupt_reason` serves the tools themselves); reach for the pieces directly when your entrypoint needs a shape of its own — messages to edit before the run, an agent to stream some other way.
 
-### Entrypoint
+### Reply
 
-#### `welt_agent(new_agent, files_from=...)`
+#### `start_reply(agent, payload)`
 
-Builds the entrypoint `BedrockAgentCoreApp` serves. It reads which envelope Welt sent — Converse-shaped `messages` for a conversation turn, `interrupt_responses` for the answers that resume an interrupted run — drives the agent, and yields the events Welt renders.
+Starts the stream that replies to Welt's payload. It reads which envelope Welt sent — Converse-shaped `messages` for a conversation turn, `interrupt_responses` for the answers that resume an interrupted run — decodes it, and streams the Agent it was given on the result. What comes back is the agent's raw stream, for `renderable_events` to reduce.
 
-Every turn runs on a fresh Agent from `new_agent`: the Slack thread is the source of truth for conversation history, and the messages Welt sends carry it whole. An interrupted Agent waits inside the entrypoint for its answers — one slot, resume-only, living and dying with the session's microVM (recycled on idle timeout, 8 hours at most); resuming after that raises, which Welt renders as its resume-failure notice. `files_from` passes through to `renderable_events` below.
-
-#### `send_file(name, data)`
-
-Queues one file for the Slack thread from inside a tool, riding the wire beside the reply being streamed. The model never sees it — a tool whose file matters to the conversation says what it holds in its result, or returns it as a content block and is named in `files_from`, which puts it in front of the model and on the thread both. Every turn starts with the queue empty, so a file a failed turn left behind never rides a later reply, and an empty name or empty bytes is refused where the tool is still on the stack — Slack refuses a zero-byte upload, and the whole reply fails with it.
+Which Agent that is stays with the caller, and so does whatever it takes to answer that question. A conversation turn runs on a fresh Agent, because the Slack thread is the source of truth for conversation history and the messages Welt sends carry it whole; a resume runs on the Agent that raised the interrupt, which the caller kept — under the interrupt ids Welt sends back, or in a Strands session manager, or however else suits the agent. Nothing is held here, so nothing here decides how long an unanswered approval stays answerable.
 
 ### Inbound
 
