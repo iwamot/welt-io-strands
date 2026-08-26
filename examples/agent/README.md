@@ -49,7 +49,9 @@ uv add --project app/WeltExample welt-io-strands strands-agents-tools
 agentcore deploy
 ```
 
-The agent uses `global.anthropic.claude-sonnet-4-6`, so enable access for it in the Amazon Bedrock console, in the region you deployed to, or point the `MODEL_ID` environment variable at another Converse model. To try image generation too, also enable access for the Stability AI image models, in us-west-2 — the `generate_image` tool defaults to Stable Image Core but may pick another. Note the agent runtime ARN from the deploy output: Welt's `AGENT_ARN` points at it.
+The agent uses `global.anthropic.claude-sonnet-4-6`, so enable access for it in the Amazon Bedrock console, in the region you deployed to, or point the `MODEL_ID` environment variable at another Converse model. To try image generation too, also enable access for the Stability AI image models, in us-west-2 — the `generate_image` tool defaults to Stable Image Core but may pick another. `agentcore status` reports the agent runtime ARN: Welt's `AGENT_ARN` points at it.
+
+The CLI has no teardown command — removing the deployment means deleting the CloudFormation stack it created, `AgentCore-WeltExample-default`.
 
 ## Tools
 
