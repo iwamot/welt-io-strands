@@ -41,19 +41,22 @@ os.chdir(tempfile.gettempdir())
 
 app = BedrockAgentCoreApp()
 
-# The model is the one place that decides which Bedrock endpoint and API the
-# agent talks to; nothing else in this file depends on that choice.
+# The model is the one place that decides which Bedrock endpoint, API, and
+# region the agent talks to; nothing else in this file depends on that choice.
 # BedrockModel speaks Converse to bedrock-runtime, so MODEL_ID takes any
-# Converse model there. An empty MODEL_ID means unset, like Welt's own
-# variables.
-model = BedrockModel(
-    model_id=os.environ.get("MODEL_ID") or "global.anthropic.claude-sonnet-4-6"
-)
+# Converse model there. BEDROCK_REGION sends the model calls to a region of
+# their own; unset, they go where the AWS SDK resolves one. An empty value
+# means unset, like Welt's own variables.
+_model_id = os.environ.get("MODEL_ID") or "global.anthropic.claude-sonnet-4-6"
+_region = os.environ.get("BEDROCK_REGION") or None
+model = BedrockModel(model_id=_model_id, region_name=_region)
 # For bedrock-mantle, Bedrock's OpenAI-compatible endpoint, swap in the
-# Responses API provider from `strands-agents[openai]` instead (the region
-# comes from the environment, like above):
+# Responses API provider from `strands-agents[openai]` instead:
 # from strands.models import OpenAIResponsesModel
-# model = OpenAIResponsesModel(model_id=_model_id, bedrock_mantle_config={})
+# model = OpenAIResponsesModel(
+#     model_id=_model_id,
+#     bedrock_mantle_config={"region": _region} if _region else {},
+# )
 
 
 @tool
