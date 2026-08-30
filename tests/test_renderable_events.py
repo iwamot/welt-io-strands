@@ -280,7 +280,24 @@ def test_document_without_a_name_or_format_is_named_after_its_kind() -> None:
     ]
 
     assert rendered(events) == [
-        {"file": {"name": "document", "bytes": base64.b64encode(b"raw").decode()}}
+        {"file": {"name": "document.bin", "bytes": base64.b64encode(b"raw").decode()}}
+    ]
+
+
+def test_named_document_without_a_format_gets_a_bin_extension() -> None:
+    events = [
+        {
+            "message": {
+                "role": "assistant",
+                "content": [
+                    {"document": {"name": "notes", "source": {"bytes": b"raw"}}}
+                ],
+            }
+        }
+    ]
+
+    assert rendered(events) == [
+        {"file": {"name": "notes.bin", "bytes": base64.b64encode(b"raw").decode()}}
     ]
 
 
