@@ -42,7 +42,6 @@ renderer discards.
 """
 
 import base64
-import copy
 import logging
 from collections.abc import AsyncIterator, Collection, Sequence
 from typing import Literal, NotRequired, Protocol, TypedDict
@@ -84,9 +83,10 @@ def decode_messages(messages: list) -> list:
     Raises:
         binascii.Error: If a file block's bytes are not valid base64.
     """
-    decoded = copy.deepcopy(messages)
-    _decode_sources(decoded)
-    return decoded
+    return [
+        {**message, "content": [_decode_block(block) for block in message["content"]]}
+        for message in messages
+    ]
 
 
 # The content block kinds Welt sends. A block of any other kind — a toolUse or
@@ -96,31 +96,36 @@ def decode_messages(messages: list) -> list:
 _ALLOWED_BLOCKS = frozenset({"text", "image", "document", "video"})
 
 
-def _decode_sources(messages: list) -> None:
+def _decode_block(block: dict) -> dict:
     """
-    Restore the raw bytes of every file block, in place.
+    Return the block with the raw bytes of its file restored.
+
+    A text block is returned as it is. A file block is rebuilt around a
+    new source rather than decoded in place, so the input keeps its
+    base64 and the only other copy of the bytes is the decoded one.
 
     Args:
-        messages (list): The Converse-shaped messages from Welt's payload.
+        block (dict): One Converse-shaped content block from Welt's payload.
 
     Returns:
-        None
+        dict: The block Strands consumes.
 
     Raises:
         binascii.Error: If a block's bytes are not valid base64.
         ValueError: If a block is of a kind Welt does not send.
     """
-    for message in messages:
-        for block in message["content"]:
-            if not _ALLOWED_BLOCKS.issuperset(block):
-                raise ValueError(f"unexpected content block: {sorted(block)}")
-            for kind in ("image", "document", "video"):
-                if kind in block:
-                    source = block[kind]["source"]
-                    # validate=True: the default discards what is not base64
-                    # and returns bytes that were never encoded, where this
-                    # refuses them.
-                    source["bytes"] = base64.b64decode(source["bytes"], validate=True)
+    if not _ALLOWED_BLOCKS.issuperset(block):
+        raise ValueError(f"unexpected content block: {sorted(block)}")
+    for kind in ("image", "document", "video"):
+        if kind in block:
+            file = block[kind]
+            source = file["source"]
+            # validate=True: the default discards what is not base64
+            # and returns bytes that were never encoded, where this
+            # refuses them.
+            raw = base64.b64decode(source["bytes"], validate=True)
+            return {**block, kind: {**file, "source": {**source, "bytes": raw}}}
+    return block
 
 
 def decode_interrupt_responses(responses: dict) -> list:
