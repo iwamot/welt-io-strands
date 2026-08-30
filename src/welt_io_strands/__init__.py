@@ -684,16 +684,19 @@ def _file_name(kind: str, media: dict) -> str:
 
     Args:
         kind (str): The block kind (image, document, or video).
-        media (dict): The block's value, whose optional `name` (document
-            blocks) and `format` provide the filename parts.
+        media (dict): The block's value, whose optional `name` and `format`
+            (both may be left out of a document block) provide the
+            filename parts.
 
     Returns:
-        str: The block's name (or its kind) plus the format as extension.
+        str: The block's name (or its kind) plus the format as extension,
+            or `bin` for a block that names no format — Slack types an
+            upload by its extension, so the name always carries one.
     """
     base = media.get("name") or kind
     file_format = media.get("format")
     if not file_format:
-        return base
+        return f"{base}.bin"
     return f"{base}.{_EXTENSION_BY_FORMAT.get(file_format, file_format)}"
 
 
