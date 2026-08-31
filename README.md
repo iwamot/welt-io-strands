@@ -65,7 +65,7 @@ The wire between Welt and the agent is JSON, specified by [Welt's wire contract]
 
 Starts the stream that replies to Welt's payload. It reads which envelope Welt sent — Converse-shaped `messages` for a conversation turn, `interrupt_responses` for the answers that resume an interrupted run — decodes it, and streams the Agent it was given on the result. What comes back is the agent's raw stream, for `renderable_events` to reduce.
 
-Which Agent that is stays with the caller, and so does whatever it takes to answer that question. A conversation turn runs on a fresh Agent, because the Slack thread is the source of truth for conversation history and the messages Welt sends carry it whole; a resume runs on the Agent that raised the interrupt, which the caller kept — under the interrupt ids Welt sends back, or in a Strands session manager, or however else suits the agent. Nothing is held here, so nothing here decides how long an unanswered approval stays answerable.
+Which Agent that is stays with the caller, and so does whatever it takes to answer that question. A conversation turn runs on a fresh Agent, because the Slack thread is the source of truth for conversation history and the messages Welt sends carry it whole (an agent that keeps its own history instead sets `AGENT_MANAGES_HISTORY` on the Welt side); a resume runs on the Agent that raised the interrupt, which the caller kept — under the interrupt ids Welt sends back, or in a Strands session manager, or however else suits the agent. Nothing is held here, so nothing here decides how long an unanswered approval stays answerable.
 
 ### Inbound
 
