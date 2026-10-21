@@ -77,6 +77,10 @@ exclude = [
 
 [tool.uv]
 exclude-newer = "1 day"
+# strands-agents-tools 0.8.9 caps pillow below 13, which leaves the example on a
+# version with known advisories. The example's tools do not import Pillow.
+# Remove once a strands-agents-tools release allows pillow 13.
+override-dependencies = ["pillow>=13"]
 
 [tool.uv.audit]
 # Check the locked packages against OSV malware advisories before any sync
