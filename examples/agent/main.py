@@ -17,20 +17,20 @@ JSON wire contract, which welt-io-strands adapts in both directions.
 
 import os
 import tempfile
-from collections.abc import AsyncIterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from datetime import UTC, datetime
 from uuid import uuid4
 
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from strands import Agent, ToolContext, tool
-from strands.models import BedrockModel
-from strands.types.tools import ToolUse
-from strands.vended_plugins.steering import (
-    Interrupt,
-    Proceed,
-    SteeringHandler,
-    ToolSteeringAction,
+from strands.middleware import (
+    ExecuteToolContext,
+    ExecuteToolStage,
+    MiddlewareNext,
+    ToolResultEvent,
+    TypedEvent,
 )
+from strands.models import BedrockModel
 from strands_tools import generate_image
 
 from welt_io_strands import interrupt_reason, renderable_events, start_reply
@@ -237,45 +237,51 @@ def sample_draft_report(tool_context: ToolContext, topic: str) -> str | dict:
     return f"The draft was not published. The user answered: {answer}"
 
 
-class ApprovalSteering(SteeringHandler):
+async def approve_image_generation(
+    context: ExecuteToolContext,
+    next_fn: MiddlewareNext[ExecuteToolContext, TypedEvent],
+) -> AsyncGenerator[TypedEvent]:
     """Ask before the image tool runs, from outside the tool.
 
-    A sample of the other way to raise an interrupt. The tools above call
-    `interrupt()` themselves, which a tool nobody here wrote — `generate_image`
-    comes from strands-tools — cannot be made to do; a steering handler gates
-    it from the outside instead, one place to decide for every tool the agent
-    is given.
+    The tool comes from strands-tools; middleware gives it the same
+    structured interrupt reason as the tools above without changing it.
+    Only the approve button authorizes generation. Other answers return
+    to the model as a tool error, with a typed answer preserved verbatim.
 
-    The reason is a plain message: a handler cannot declare buttons, so Welt
-    answers it with the default buttons, and the plugin reads
-    the answer (a boolean) rather than this agent. What the human needs in
-    order to decide has to travel in the message, which is why the prompt
-    goes into it.
+    Args:
+        context (ExecuteToolContext): The tool call being considered.
+        next_fn (MiddlewareNext): The next handler, which executes the tool.
+
+    Yields:
+        TypedEvent: The tool's events, or the result declining execution.
     """
-
-    async def steer_before_tool(
-        self, *, agent: Agent, tool_use: ToolUse, **kwargs: object
-    ) -> ToolSteeringAction:
-        """
-        Decide whether one tool call needs a human first.
-
-        Args:
-            agent (Agent): The agent about to run the tool.
-            tool_use (ToolUse): The tool call, its name and input.
-            **kwargs (object): Whatever else the plugin passes.
-
-        Returns:
-            ToolSteeringAction: Interrupt for the image tool, Proceed
-                otherwise.
-        """
-        if tool_use["name"] != "generate_image":
-            return Proceed(reason="Only image generation is gated here.")
-        # The gate is only as good as this method's ability to return: the
-        # plugin logs whatever this raises and lets the tool run, so the
-        # input is read for what it might be rather than what it should be.
-        tool_input = tool_use["input"]
-        prompt = tool_input.get("prompt", "") if isinstance(tool_input, dict) else ""
-        return Interrupt(reason=f"May I generate this image? — {prompt}")
+    if context.tool_use["name"] == "generate_image":
+        prompt = context.tool_use["input"].get("prompt", "")
+        answer = context.interrupt(
+            "example-image-generation-approval",
+            reason=interrupt_reason(
+                f"May I generate this image? — {prompt}",
+                approve={"label": "Generate"},
+                reject={"label": "Cancel"},
+                input={"label": "Or type your answer"},
+            ),
+        ).response
+        if answer is not True:
+            text = (
+                "Image generation was cancelled by the user."
+                if answer is False
+                else f"The image was not generated. The user answered: {answer}"
+            )
+            yield ToolResultEvent(
+                {
+                    "toolUseId": context.tool_use["toolUseId"],
+                    "status": "error",
+                    "content": [{"text": text}],
+                }
+            )
+            return
+    async for event in next_fn(context):
+        yield event
 
 
 # The tools whose files belong in the Slack thread. A tool left out keeps
@@ -329,7 +335,7 @@ def new_agent() -> Agent:
         Agent: A fresh Agent — a conversation turn runs on the messages
             Welt sends and nothing else.
     """
-    return Agent(
+    agent = Agent(
         model=model,
         tools=[
             current_time,
@@ -338,9 +344,10 @@ def new_agent() -> Agent:
             sample_dangerous_action,
             sample_draft_report,
         ],
-        plugins=[ApprovalSteering()],
         callback_handler=None,
     )
+    agent.add_middleware(ExecuteToolStage, approve_image_generation)
+    return agent
 
 
 @app.entrypoint
