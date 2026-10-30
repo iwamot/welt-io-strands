@@ -41,6 +41,8 @@ The Agent is yours to choose, one payload at a time. An agent with approval tool
 
 See [`examples/agent`](examples/agent) for the full version — the smallest complete agent built on this package (text streaming, tool use, image generation, file output, file input, and human-approval tools), which doubles as the example for [Welt's Quick Start](https://github.com/iwamot/welt#quick-start). The sections below cover `start_reply` and the adapters it wires in.
 
+[`examples/harness`](examples/harness) builds an agent with Strands Harness, including shell, file, and web-fetch tools with human approval. It also shows how to bring a prototype from the Strands CLI into Welt.
+
 ## Supported Versions
 
 ### Welt
