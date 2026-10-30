@@ -29,6 +29,7 @@ allowed_licenses=(
   Python-2.0
   Zlib
   # Names from license classifiers and free-form License fields
+  "3-Clause BSD License"
   "Apache License 2.0"
   "Apache Software License"
   "BSD License"

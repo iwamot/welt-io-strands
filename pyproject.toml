@@ -49,6 +49,7 @@ dev = [
     "pytest-cov==7.1.0",
     "strands-agents==1.62.0",
     "strands-agents-tools==0.8.10",
+    "strands-harness==0.3.3",
 ]
 
 [build-system]
@@ -77,6 +78,9 @@ exclude = [
 
 [tool.uv]
 exclude-newer = "1 day"
+# Exercise the Harness release used by the example before its one-day soak.
+# Remove this exception once 0.3.3 has aged past 2026-10-30 19:02 UTC.
+exclude-newer-package = { strands-harness = "0 days" }
 # strands-agents-tools 0.8.9 caps pillow below 13, which leaves the example on a
 # version with known advisories. The example's tools do not import Pillow.
 # Remove once a strands-agents-tools release allows pillow 13.
