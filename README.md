@@ -9,7 +9,7 @@ The [Strands Agents](https://strandsagents.com/) (Python) adapter for [Welt](htt
 ## Install
 
 ```bash
-uv add welt-io-strands
+uv add welt-io-strands bedrock-agentcore
 ```
 
 ## Usage
@@ -38,6 +38,8 @@ if __name__ == "__main__":
 ```
 
 The Agent is yours to choose, one payload at a time. An agent with approval tools keeps the interrupted runs it needs to resume; [`examples/agent`](examples/agent) shows that as a map in `main.py`, filled as interrupts stream out and emptied when their answers arrive.
+
+To see it in Slack, run the file (`uv run main.py`). It serves on port 8080, where Welt's local mode reaches it, so follow [Welt's Quick Start](https://github.com/iwamot/welt#quick-start) with this file in place of the example agent. To deploy, follow the example's [Deploy](examples/agent#deploy) section with this file in place of the downloaded `main.py`, then point Welt's `AGENT_ARN` at the runtime.
 
 See [`examples/agent`](examples/agent) for the full version — the smallest complete agent built on this package (text streaming, tool use, image generation, file output, file input, and human-approval tools), which doubles as the example for [Welt's Quick Start](https://github.com/iwamot/welt#quick-start). The sections below cover `start_reply` and the adapters it wires in.
 
@@ -95,8 +97,10 @@ Reduces raw `stream_async` events — not JSON-serializable as-is — to the eve
 |---|---|---|
 | Text deltas | `data` | The streamed reply |
 | Tool invocations and results | `current_tool_use` / `tool_result` | "Using tool" indicators (tool output stays off the wire) |
-| Image / document / video blocks the model produces, or a tool named in `files_from` returns | `file` | An uploaded file ([size limits](https://github.com/iwamot/welt/blob/main/docs/wire.md#limits)) |
+| Image / document / video blocks a tool named in `files_from` returns, or an assistant message carries | `file` | An uploaded file ([size limits](https://github.com/iwamot/welt/blob/main/docs/wire.md#limits)) |
 | Pending [interrupts](https://strandsagents.com/docs/user-guide/sdk/interrupts/) | `interrupt` | Buttons and/or a text field |
+
+**A file the model generates does not reach the thread by itself.** The adapter uploads file blocks in an assistant message, but Strands' streaming does not build them from model output. With the built-in model providers, files reach the thread only from tools named in `files_from`, so to share a generated file, call the generating model from such a tool, as the [example agent](examples/agent)'s `generate_image` does.
 
 A run that stops for human input ends its stream with one `interrupt` event per pending interrupt; agents that do not use interrupts see no change.
 
