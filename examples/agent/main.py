@@ -15,12 +15,14 @@ This example is a standalone deployable; Welt drives it only through the
 JSON wire contract, which welt-io-strands adapts in both directions.
 """
 
+import json
 import os
-import tempfile
+from base64 import b64decode
 from collections.abc import AsyncGenerator, AsyncIterator, Mapping
 from datetime import UTC, datetime
 from uuid import uuid4
 
+import boto3
 from bedrock_agentcore.runtime import BedrockAgentCoreApp
 from strands import Agent, ToolContext, tool
 from strands.middleware import (
@@ -31,13 +33,8 @@ from strands.middleware import (
     TypedEvent,
 )
 from strands.models import BedrockModel
-from strands_tools import generate_image
 
 from welt_io_strands import interrupt_reason, renderable_events, start_reply
-
-# generate_image saves each image under ./output as a side effect, and the
-# temp dir is the writable path in the AgentCore Runtime container.
-os.chdir(tempfile.gettempdir())
 
 app = BedrockAgentCoreApp()
 
@@ -57,6 +54,11 @@ model = BedrockModel(model_id=_model_id, region_name=_region)
 #     model_id=_model_id,
 #     bedrock_mantle_config={"region": _region} if _region else {},
 # )
+
+# The image model has a region of its own, whichever one the agent's model
+# calls go to: access to it is enabled there.
+_IMAGE_MODEL_ID = "stability.stable-image-core-v1:1"
+_IMAGE_REGION = "us-west-2"
 
 
 @tool
@@ -88,6 +90,34 @@ def _document_name(stem: str) -> str:
         str: The stem, tailed apart from the run's other documents.
     """
     return f"{stem}-{uuid4().hex[:8]}"
+
+
+@tool
+def generate_image(prompt: str) -> dict:
+    """
+    Generate an image from a text prompt.
+
+    Args:
+        prompt (str): What the image should show.
+
+    Returns:
+        dict: The outcome, the image carried as an image block — which
+            reaches the model, and the Slack thread because the entrypoint
+            takes files from this tool.
+    """
+    client = boto3.client("bedrock-runtime", region_name=_IMAGE_REGION)
+    response = client.invoke_model(
+        modelId=_IMAGE_MODEL_ID,
+        body=json.dumps({"prompt": prompt, "output_format": "jpeg"}),
+    )
+    image = json.loads(response["body"].read())["images"][0]
+    return {
+        "status": "success",
+        "content": [
+            {"text": "Generated the image."},
+            {"image": {"format": "jpeg", "source": {"bytes": b64decode(image)}}},
+        ],
+    }
 
 
 @tool
@@ -243,7 +273,7 @@ async def approve_image_generation(
 ) -> AsyncGenerator[TypedEvent]:
     """Ask before the image tool runs, from outside the tool.
 
-    The tool comes from strands-tools; middleware gives it the same
+    The tool itself knows nothing of approval; middleware gives it the same
     structured interrupt reason as the tools above without changing it.
     Only the approve button authorizes generation. Other answers return
     to the model as a tool error, with a typed answer preserved verbatim.

@@ -8,7 +8,6 @@ The example agent for [Welt](https://github.com/iwamot/welt)'s [Quick Start](htt
 |---------|------|
 | [Bedrock AgentCore SDK](https://github.com/aws/bedrock-agentcore-sdk-python) | Serves the endpoint |
 | [Strands Agents SDK](https://strandsagents.com/) | Runs the model and the tools |
-| [Strands Agents Tools](https://github.com/strands-agents/tools) | Provides the `generate_image` tool |
 | welt-io-strands | Adapts the wire to Welt |
 
 ## Run Locally
@@ -19,7 +18,7 @@ Fetch the agent and run it with [uv](https://docs.astral.sh/uv/):
 
 ```sh
 curl -O https://raw.githubusercontent.com/iwamot/welt-io-strands/main/examples/agent/main.py
-uv run --with bedrock-agentcore --with strands-agents-tools --with welt-io-strands \
+uv run --with bedrock-agentcore --with welt-io-strands \
   --with "botocore[crt]" main.py
 ```
 
@@ -29,7 +28,7 @@ The process needs AWS credentials the standard SDK way — environment variables
 
 `BEDROCK_REGION` sends the model calls to a region of their own — useful locally, when the model access you want is not where your credentials point. Unset, `BedrockModel` resolves one the AWS SDK way: `AWS_DEFAULT_REGION`, then the profile's own `region`, then `AWS_REGION`, then `us-west-2` when nothing names one.
 
-To try image generation too, also enable access for the Stability AI image models, in us-west-2 — the `generate_image` tool defaults to Stable Image Core but may pick another.
+To try image generation too, also enable access for Stable Image Core, in us-west-2, which is what the `generate_image` tool calls.
 
 One difference from the cloud: AgentCore Runtime gives every session its own microVM, while the local server is a single process for all sessions — the interrupted runs the agent keeps all share that one process, outlive the session that raised them, and accumulate while unanswered until the process exits.
 
@@ -46,12 +45,12 @@ curl -o app/WeltExample/main.py https://raw.githubusercontent.com/iwamot/welt-io
 
 # welt-io-strands' floor; left out, uv takes the local Python's, which may be newer than AgentCore runs
 uv init --bare --python 3.12 app/WeltExample
-uv add --project app/WeltExample bedrock-agentcore aws-opentelemetry-distro strands-agents-tools welt-io-strands
+uv add --project app/WeltExample bedrock-agentcore aws-opentelemetry-distro welt-io-strands
 
 agentcore deploy
 ```
 
-The agent uses `global.anthropic.claude-sonnet-4-6`, so enable access for it in the Amazon Bedrock console, in the region you deployed to, or point the `MODEL_ID` environment variable at another Converse model — and `BEDROCK_REGION` at another region, to leave the model access where it already is. To try image generation too, also enable access for the Stability AI image models, in us-west-2 — the `generate_image` tool defaults to Stable Image Core but may pick another. `agentcore status` reports the agent runtime ARN: Welt's `AGENT_ARN` points at it.
+The agent uses `global.anthropic.claude-sonnet-4-6`, so enable access for it in the Amazon Bedrock console, in the region you deployed to, or point the `MODEL_ID` environment variable at another Converse model — and `BEDROCK_REGION` at another region, to leave the model access where it already is. To try image generation too, also enable access for Stable Image Core, in us-west-2, which is what the `generate_image` tool calls. `agentcore status` reports the agent runtime ARN: Welt's `AGENT_ARN` points at it.
 
 ### Verify the Deployment
 
@@ -88,7 +87,7 @@ agentcore deploy --yes
 ## Tools
 
 - `current_time` — the minimal tool: plain text streaming, nothing else. Ask "what time is it?" to see tool use in the thread.
-- [`generate_image`](https://github.com/strands-agents/tools/blob/main/src/strands_tools/generate_image.py) — returns the image as a tool-result block, which the model sees and welt-io-strands turns into a file upload. Tool-execution middleware asks for approval with **Generate** / **Cancel** buttons and a free-text field before the image tool runs. Ask it to draw something.
+- `generate_image` — calls Stable Image Core through bedrock-runtime and returns the image as a tool-result block, which the model sees and welt-io-strands turns into a file upload. Tool-execution middleware asks for approval with **Generate** / **Cancel** buttons and a free-text field before the image tool runs. Ask it to draw something.
 - `create_sample_file` — writes a small CSV and returns it as a document block, which the model reads and Welt uploads to the thread. Its name carries a random tail (`sample-3f2a1b9c.csv`) because a document's name has to be unique across the run. Ask it for a sample file.
 - `sample_dangerous_action` — a pretend dangerous action (no side effects, no extra AWS permissions) that pauses for human approval: Welt renders the pause as **Approve** / **Cancel** buttons plus a free-text field in the Slack thread, and whichever answer comes first — a press, or typed text — resumes the run. Ask "deploy to prod", then press a button or type something like "not now". See [Welt's Interrupts doc](https://github.com/iwamot/welt/blob/main/docs/interrupts.md) for the round trip.
 - `sample_draft_report` — drafts a small report, pauses to show it for approval, and on approval returns it as a markdown file (`report-8f3a2c1d.md`, tailed for the same reason). Drafting before the pause is the Strands interrupt pitfall: an interrupted tool re-executes from its start on resume, so the drafting is memoized on the tool use id and the published file stays identical to the approved draft. The draft is timestamped, so a silent redraft would show. Ask "draft a report about apples", then answer the buttons.
