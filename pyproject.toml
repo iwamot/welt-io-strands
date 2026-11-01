@@ -47,7 +47,7 @@ dev = [
     "pip-licenses==5.5.5",
     "pytest==9.2.0",
     "pytest-cov==7.1.0",
-    "strands-agents==1.62.0",
+    "strands-agents==1.63.0",
     "strands-agents-tools==0.8.10",
     "strands-harness==0.3.3",
 ]
