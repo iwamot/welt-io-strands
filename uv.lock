@@ -1291,16 +1291,16 @@ otel = [
 
 [[package]]
 name = "strands-harness"
-version = "0.3.3"
+version = "0.3.4"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "pydantic" },
     { name = "pydantic-monty" },
     { name = "strands-agents", extra = ["otel"] },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/8b/c0/dcc4df75d97fe9ea29ef688c473a3a22cef9428550d3562b07b97999a213/strands_harness-0.3.3.tar.gz", hash = "sha256:6f00d1df052e4e671eb255e0511f52eca0406efd033c125bcf95d559cfd1d6a0", size = 163184, upload-time = "2026-10-29T19:01:50.47Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/e5/8e/09e1321203248bfe0a1277bf9b9bd75c65369821266bb265297a991bdc46/strands_harness-0.3.4.tar.gz", hash = "sha256:43e6c633f5f1f5d06ee643497183044b666fa62cd7d20dc8851b580244f4010d", size = 163231, upload-time = "2026-11-04T19:29:14.91Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c3/38/5d361033fc15e047e3fbd80f77b984ef8057b37283523aba775662cfe79d/strands_harness-0.3.3-py3-none-any.whl", hash = "sha256:c6b4167163be8daa7185e2d94742862256d0e3939ebe90bc733f9c30ba49f11e", size = 92329, upload-time = "2026-10-29T19:01:48.779Z" },
+    { url = "https://files.pythonhosted.org/packages/5b/fd/c30d865747032c29434fe08f8c757d8333af9184a2ed4e7a402732939575/strands_harness-0.3.4-py3-none-any.whl", hash = "sha256:71a403806e8ebb04bdc5308335a903cdc701cdcc637430899da8a1132e326268", size = 92331, upload-time = "2026-11-04T19:29:13.537Z" },
 ]
 
 [[package]]
@@ -1487,7 +1487,7 @@ dev = [
     { name = "pytest", specifier = "==9.2.0" },
     { name = "pytest-cov", specifier = "==7.1.0" },
     { name = "strands-agents", specifier = "==1.64.0" },
-    { name = "strands-harness", specifier = "==0.3.3" },
+    { name = "strands-harness", specifier = "==0.3.4" },
 ]
 
 [[package]]
