@@ -41,7 +41,7 @@ dev = [
     # installed here so lint and type checks cover it against the local
     # library.
     "bedrock-agentcore==1.26.0",
-    "boto3==1.44.1",
+    "boto3==1.44.2",
     # compatibility.sh reads the declared floors with it. Pinned even though it
     # arrives through pytest, so CI names the version it uses.
     "packaging==26.3",
