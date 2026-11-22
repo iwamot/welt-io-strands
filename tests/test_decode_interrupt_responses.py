@@ -1,52 +1,45 @@
+import json
+from copy import deepcopy
+from itertools import product
+
 from welt_io_strands import decode_interrupt_responses
 
 
-def test_each_answer_becomes_an_interrupt_response_item() -> None:
-    answers = {
-        "i-1": {"value": "approve", "source": "option"},
-        "i-2": {"value": "make it shorter", "source": "input"},
-    }
-
-    assert decode_interrupt_responses(answers) == [
-        {"interruptResponse": {"interruptId": "i-1", "response": "approve"}},
-        {
-            "interruptResponse": {
-                "interruptId": "i-2",
-                "response": "make it shorter",
-            }
-        },
-    ]
-
-
-def test_an_answer_travels_on_as_the_value_it_was_given() -> None:
-    answers = {
-        "i-1": {"value": True, "source": "option"},
-        "i-2": {"value": None, "source": "option"},
-        "i-3": {"value": {"decision": "hold"}, "source": "option"},
-    }
-
-    decoded = decode_interrupt_responses(answers)
-
-    assert [item["interruptResponse"]["response"] for item in decoded] == [
+def test_answers_preserve_values_ids_and_order() -> None:
+    values = (
+        "approve",
+        "make it shorter",
         True,
+        False,
         None,
+        42,
+        "",
+        ["a"],
         {"decision": "hold"},
-    ]
-
-
-def test_answer_order_is_preserved() -> None:
-    answers = {
-        "i-2": {"value": False, "source": "option"},
-        "i-1": {"value": True, "source": "option"},
-    }
-
-    decoded = decode_interrupt_responses(answers)
-
-    assert [item["interruptResponse"]["interruptId"] for item in decoded] == [
-        "i-2",
-        "i-1",
-    ]
-
-
-def test_no_answers_decode_to_no_items() -> None:
-    assert decode_interrupt_responses({}) == []
+    )
+    for size in range(4):
+        for chosen in product(values, repeat=size):
+            for source in ("option", "input"):
+                answers = {
+                    f"i-{size - i}": {
+                        "value": value,
+                        "source": source if isinstance(value, str) else "option",
+                    }
+                    for i, value in enumerate(chosen)
+                }
+                expected = [
+                    {
+                        "interruptResponse": {
+                            "interruptId": f"i-{size - i}",
+                            "response": value,
+                        }
+                    }
+                    for i, value in enumerate(chosen)
+                ]
+                before = deepcopy(answers)
+                actual = decode_interrupt_responses(answers)
+                # JSON distinguishes booleans from numbers, unlike Python equality.
+                assert json.dumps(actual, sort_keys=True) == json.dumps(
+                    expected, sort_keys=True
+                ), answers
+                assert answers == before
