@@ -2,7 +2,9 @@ import asyncio
 import base64
 import logging
 from collections.abc import AsyncIterator
+from copy import deepcopy
 from dataclasses import dataclass, field
+from itertools import product
 
 import pytest
 from strands.agent import AgentResult
@@ -70,97 +72,101 @@ def rendered(
     return asyncio.run(gather())
 
 
-def test_data_event_is_reduced_to_its_data_key() -> None:
-    events = [{"data": "hello", "delta": {"text": "hello"}, "agent": object()}]
+def test_stream_projection_preserves_order_multiplicity_and_public_fields() -> None:
+    cases = (
+        ({"data": "a", "delta": {"text": "a"}}, [{"data": "a"}]),
+        ({"data": "日本語\n "}, [{"data": "日本語\n "}]),
+        ({"data": ""}, []),
+        ({"init_event_loop": True}, []),
+        ({"delta": {"text": "chunk"}}, []),
+        (
+            {
+                "current_tool_use": {
+                    "toolUseId": "id-1",
+                    "name": "current_time",
+                    "input": '{"city":',
+                }
+            },
+            [{"current_tool_use": {"toolUseId": "id-1", "name": "current_time"}}],
+        ),
+        (
+            {"current_tool_use": {"toolUseId": "id-1", "input": ""}},
+            [{"current_tool_use": {"toolUseId": "id-1"}}],
+        ),
+        ({"message": {"role": "assistant", "content": [{"text": "hi"}]}}, []),
+        (
+            {
+                "message": {
+                    "role": "user",
+                    "content": [
+                        {
+                            "toolResult": {
+                                "toolUseId": "id-1",
+                                "status": "success",
+                                "content": [{"text": "large output"}],
+                            }
+                        },
+                        {
+                            "toolResult": {
+                                "toolUseId": "id-2",
+                                "status": "error",
+                                "content": [],
+                            }
+                        },
+                    ],
+                }
+            },
+            [
+                {"tool_result": {"toolUseId": "id-1", "status": "success"}},
+                {"tool_result": {"toolUseId": "id-2", "status": "error"}},
+            ],
+        ),
+    )
+    for size in range(4):
+        for selected in product(cases, repeat=size):
+            events = [deepcopy(event) for event, _ in selected]
+            before = deepcopy(events)
+            expected = [item for _, output in selected for item in output]
+            assert rendered(events) == expected, events
+            assert events == before
 
-    assert rendered(events) == [{"data": "hello"}]
 
-
-def test_current_tool_use_event_keeps_only_the_name_and_id() -> None:
-    tool_use = {"toolUseId": "id-1", "name": "current_time", "input": '{"city":'}
-    events = [{"current_tool_use": tool_use, "agent": object()}]
-
-    assert rendered(events) == [
-        {"current_tool_use": {"name": "current_time", "toolUseId": "id-1"}}
-    ]
-
-
-def test_a_tool_use_the_stream_has_not_named_yet_carries_what_it_has() -> None:
-    events = [{"current_tool_use": {"toolUseId": "id-1", "input": ""}}]
-
-    assert rendered(events) == [{"current_tool_use": {"toolUseId": "id-1"}}]
-
-
-def test_an_empty_data_chunk_carries_nothing_to_render() -> None:
-    events = [{"data": "", "delta": {"text": ""}}, {"data": "hi"}]
-
-    assert rendered(events) == [{"data": "hi"}]
+def test_interrupt_events_preserve_all_ids_names_and_reasons() -> None:
+    reasons = (
+        None,
+        "Deploy?",
+        {
+            "message": "Deploy to prod?",
+            "options": [{"value": "approve", "label": "Deploy", "style": "primary"}],
+            "extra": {"nested": [1, {"deep": True}]},
+        },
+    )
+    for size in range(4):
+        for selected in product(reasons, repeat=size):
+            interrupts = [
+                Interrupt(id=f"i-{i}", name=f"approval-{i}", reason=reason)
+                for i, reason in enumerate(selected)
+            ]
+            expected = [
+                {
+                    "interrupt": {
+                        "id": f"i-{i}",
+                        "name": f"approval-{i}",
+                        "reason": reason,
+                    }
+                }
+                for i, reason in enumerate(selected)
+            ]
+            actual = rendered([{"result": result_of(*interrupts)}])
+            assert actual == expected
+            for event, reason in zip(actual, selected, strict=True):
+                assert event["interrupt"]["reason"] is reason
 
 
 def test_data_takes_precedence_over_current_tool_use() -> None:
     events = [{"data": "hello", "current_tool_use": {"toolUseId": "id-1"}}]
 
     assert rendered(events) == [{"data": "hello"}]
-
-
-def test_tool_result_message_is_slimmed_to_id_and_status() -> None:
-    events = [
-        {
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "toolResult": {
-                            "toolUseId": "id-1",
-                            "status": "success",
-                            "content": [{"text": "arbitrarily large output"}],
-                        }
-                    }
-                ],
-            }
-        }
-    ]
-
-    assert rendered(events) == [
-        {"tool_result": {"toolUseId": "id-1", "status": "success"}}
-    ]
-
-
-def test_yields_one_tool_result_per_block() -> None:
-    events = [
-        {
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "toolResult": {
-                            "toolUseId": "id-1",
-                            "status": "success",
-                            "content": [],
-                        }
-                    },
-                    {
-                        "toolResult": {
-                            "toolUseId": "id-2",
-                            "status": "error",
-                            "content": [],
-                        }
-                    },
-                ],
-            }
-        }
-    ]
-
-    assert rendered(events) == [
-        {"tool_result": {"toolUseId": "id-1", "status": "success"}},
-        {"tool_result": {"toolUseId": "id-2", "status": "error"}},
-    ]
-
-
-def test_model_message_without_tool_results_yields_nothing() -> None:
-    events = [{"message": {"role": "assistant", "content": [{"text": "hi"}]}}]
-
-    assert rendered(events) == []
 
 
 def test_tool_result_image_becomes_a_file_event_after_the_tool_result() -> None:
@@ -438,89 +444,3 @@ def test_tool_use_the_agent_does_not_know_uploads_nothing() -> None:
     )
 
     assert result == [{"tool_result": {"toolUseId": "id-other", "status": "success"}}]
-
-
-def test_result_interrupt_becomes_an_interrupt_event() -> None:
-    interrupt = Interrupt(id="i-1", name="deploy-approval", reason="Deploy?")
-
-    assert rendered([{"result": result_of(interrupt)}]) == [
-        {"interrupt": {"id": "i-1", "name": "deploy-approval", "reason": "Deploy?"}}
-    ]
-
-
-def test_yields_one_interrupt_event_per_interrupt() -> None:
-    events = [
-        {
-            "result": result_of(
-                Interrupt(id="i-1", name="approval-a", reason="A?"),
-                Interrupt(id="i-2", name="approval-b", reason="B?"),
-            )
-        }
-    ]
-
-    assert rendered(events) == [
-        {"interrupt": {"id": "i-1", "name": "approval-a", "reason": "A?"}},
-        {"interrupt": {"id": "i-2", "name": "approval-b", "reason": "B?"}},
-    ]
-
-
-def test_interrupt_reason_is_passed_through_unmodified() -> None:
-    reason = {
-        "message": "Deploy to prod?",
-        "options": [{"value": "approve", "label": "Deploy", "style": "primary"}],
-        "extra": {"nested": [1, {"deep": True}]},
-    }
-    interrupt = Interrupt(id="i-1", name="deploy-approval", reason=reason)
-
-    rendered_reason = rendered([{"result": result_of(interrupt)}])[0]["interrupt"][
-        "reason"
-    ]
-
-    assert rendered_reason is reason
-
-
-def test_interrupt_without_reason_keeps_none() -> None:
-    events = [{"result": result_of(Interrupt(id="i-1", name="n"))}]
-
-    assert rendered(events) == [
-        {"interrupt": {"id": "i-1", "name": "n", "reason": None}}
-    ]
-
-
-def test_result_without_interrupts_yields_nothing() -> None:
-    assert rendered([{"result": result_of()}]) == []
-
-
-def test_unrenderable_events_are_dropped() -> None:
-    events = [{"init_event_loop": True}, {"delta": {"text": "chunk"}}]
-
-    assert rendered(events) == []
-
-
-def test_stream_order_is_preserved() -> None:
-    events = [
-        {"data": "a"},
-        {"current_tool_use": {"toolUseId": "id-1"}},
-        {
-            "message": {
-                "role": "user",
-                "content": [
-                    {
-                        "toolResult": {
-                            "toolUseId": "id-1",
-                            "status": "success",
-                            "content": [],
-                        }
-                    }
-                ],
-            }
-        },
-        {"data": "b"},
-    ]
-
-    assert rendered(events) == [
-        {"data": "a"},
-        {"current_tool_use": {"toolUseId": "id-1"}},
-        {"tool_result": {"toolUseId": "id-1", "status": "success"}},
-        {"data": "b"},
-    ]

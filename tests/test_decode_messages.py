@@ -1,5 +1,7 @@
 import base64
 import binascii
+from copy import deepcopy
+from itertools import product
 
 import pytest
 
@@ -18,74 +20,83 @@ def image_block(raw: bytes = b"img") -> dict:
     return {"image": {"format": "png", "source": {"bytes": encoded(raw)}}}
 
 
-def document_block(name: str = "report") -> dict:
-    return {
-        "document": {
-            "format": "pdf",
-            "name": name,
-            "source": {"bytes": encoded(b"doc")},
-        }
-    }
+def test_decoding_preserves_messages_except_for_restoring_file_bytes() -> None:
+    for raw in (b"img", b"doc", b"vid", b"\x00", bytes(range(256)), b"abcde" * 101):
+        for size in range(4):
+            for kinds in product(("text", "image", "document", "video"), repeat=size):
+                wire_blocks = []
+                raw_blocks = []
+                for i, kind in enumerate(kinds):
+                    if kind == "text":
+                        wire_blocks.append({"text": f"@iwamot: 日本語 {i}\n"})
+                        raw_blocks.append({"text": f"@iwamot: 日本語 {i}\n"})
+                    else:
+                        fields = {
+                            "format": {
+                                "image": "png",
+                                "document": "pdf",
+                                "video": "mp4",
+                            }[kind]
+                        }
+                        if kind == "document":
+                            fields["name"] = "report"
+                        wire_blocks.append(
+                            {kind: fields | {"source": {"bytes": encoded(raw)}}}
+                        )
+                        raw_blocks.append({kind: fields | {"source": {"bytes": raw}}})
+                for width in (1, 3):
+                    messages = []
+                    expected = []
+                    for i in range(0, size, width):
+                        # Welt's assistant history contains text, not uploads.
+                        assistant = {
+                            "role": "assistant",
+                            "content": [{"text": f"reply {i}"}],
+                        }
+                        messages.extend(
+                            [
+                                {"role": "user", "content": wire_blocks[i : i + width]},
+                                assistant,
+                            ]
+                        )
+                        expected.extend(
+                            [
+                                {"role": "user", "content": raw_blocks[i : i + width]},
+                                {
+                                    "role": "assistant",
+                                    "content": [{"text": f"reply {i}"}],
+                                },
+                            ]
+                        )
+                    before = deepcopy(messages)
+                    assert decode_messages(messages) == expected, (raw, kinds, width)
+                    assert messages == before
 
 
-def test_decodes_image_document_and_video_blocks() -> None:
-    messages = [
-        user_message(
-            image_block(),
-            document_block(),
-            {"video": {"format": "mp4", "source": {"bytes": encoded(b"vid")}}},
-        )
-    ]
-
-    decoded = decode_messages(messages)
-
-    assert decoded == [
-        {
-            "role": "user",
-            "content": [
-                {"image": {"format": "png", "source": {"bytes": b"img"}}},
-                {
-                    "document": {
-                        "format": "pdf",
-                        "name": "report",
-                        "source": {"bytes": b"doc"},
-                    }
-                },
-                {"video": {"format": "mp4", "source": {"bytes": b"vid"}}},
-            ],
-        }
-    ]
-
-
-def test_decodes_across_multiple_messages() -> None:
-    messages = [user_message(image_block(b"a")), user_message(image_block(b"b"))]
-
-    decoded = decode_messages(messages)
-
-    assert [
-        message["content"][0]["image"]["source"]["bytes"] for message in decoded
-    ] == [b"a", b"b"]
-
-
-def test_leaves_input_untouched() -> None:
-    messages = [user_message(image_block())]
-
-    decode_messages(messages)
-
-    assert messages[0]["content"][0]["image"]["source"]["bytes"] == encoded(b"img")
-
-
-def test_leaves_text_blocks_alone() -> None:
-    messages = [
-        user_message({"text": "@iwamot: hello"}),
-        {"role": "assistant", "content": [{"text": "hi"}]},
-    ]
-
-    assert decode_messages(messages) == messages
-
-
-def test_an_empty_conversation_decodes_to_an_empty_one() -> None:
-    assert decode_messages([]) == []
+def test_uploads_never_borrow_bytes_from_another_block_or_message() -> None:
+    payloads = (b"a", b"b", b"\x00", bytes(range(256)))
+    for kind, format_token in (("image", "png"), ("document", "pdf"), ("video", "mp4")):
+        blocks = [
+            {
+                kind: {
+                    "format": format_token,
+                    "source": {"bytes": encoded(raw)},
+                    **({"name": "report"} if kind == "document" else {}),
+                }
+            }
+            for raw in payloads
+        ]
+        for width in (1, 4):
+            messages = [
+                user_message(*blocks[i : i + width])
+                for i in range(0, len(blocks), width)
+            ]
+            decoded = decode_messages(messages)
+            assert [
+                block[kind]["source"]["bytes"]
+                for message in decoded
+                for block in message["content"]
+            ] == list(payloads)
 
 
 def test_bytes_that_base64_refuses_raise() -> None:
