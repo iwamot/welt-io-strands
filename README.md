@@ -37,9 +37,9 @@ if __name__ == "__main__":
     app.run()
 ```
 
-The Agent is yours to choose, one payload at a time. An agent with approval tools keeps the interrupted runs it needs to resume; [`examples/agent`](examples/agent) shows that as a map in `main.py`, filled as interrupts stream out and emptied when their answers arrive.
+The Agent is yours to choose, one payload at a time. An agent with approval tools keeps the interrupted runs it needs to resume; [`examples/agent`](examples/agent) keeps each one in an S3 bucket as a Strands snapshot, written when its interrupts stream out and removed when their answers arrive, so that the answers can resume it in whichever process receives them.
 
-To see it in Slack, run the file (`uv run main.py`). It serves on port 8080, where Welt's local mode reaches it, so follow [Welt's Quick Start](https://github.com/iwamot/welt#quick-start) with this file in place of the example agent. To deploy, follow the example's [Deploy](examples/agent#deploy) section with this file in place of the downloaded `main.py`, then point Welt's `AGENT_ARN` at the runtime.
+To see it in Slack, run the file (`uv run main.py`). It serves on port 8080, where Welt's local mode reaches it, so follow [Welt's Quick Start](https://github.com/iwamot/welt#quick-start) with this file in place of the example agent. To deploy, follow the example's [AgentCore Runtime](examples/agent#deploy-to-agentcore-runtime) or [Lambda Web Functions](examples/agent#deploy-to-aws-lambda-web-functions) section with this file in place of the downloaded `main.py`, then point Welt's `AGENT_ARN` at the runtime, or its `AGENT_URL` at the Web Function.
 
 See [`examples/agent`](examples/agent) for the full version — the smallest complete agent built on this package (text streaming, tool use, image generation, file output, file input, and human-approval tools), which doubles as the example for [Welt's Quick Start](https://github.com/iwamot/welt#quick-start). The sections below cover `start_reply` and the adapters it wires in.
 

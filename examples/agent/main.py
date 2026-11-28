@@ -9,12 +9,14 @@ streams the Agent this file hands it; `renderable_events` reduces what it
 streams.
 
 Which Agent that is, this file decides — including keeping an interrupted
-run until its buttons are answered, below.
+run in S3 until its buttons are answered, below, so that the answers can
+resume it wherever they arrive.
 
 This example is a standalone deployable; Welt drives it only through the
 JSON wire contract, which welt-io-strands adapts in both directions.
 """
 
+import asyncio
 import json
 import os
 from base64 import b64decode
@@ -33,6 +35,7 @@ from strands.middleware import (
     TypedEvent,
 )
 from strands.models import BedrockModel
+from strands.types import Snapshot
 
 from welt_io_strands import interrupt_reason, renderable_events, start_reply
 
@@ -179,11 +182,7 @@ def sample_dangerous_action(tool_context: ToolContext, action: str) -> str:
     return f"The action was not run. The user answered: {answer}"
 
 
-# Draft bodies by tool use id, dropped as soon as their tool call is answered.
-_drafts: dict[str, str] = {}
-
-
-def _drafted_report(tool_use_id: str, topic: str) -> str:
+def _drafted_report(agent: Agent, tool_use_id: str, topic: str) -> str:
     """
     Draft the report body once per tool call.
 
@@ -191,24 +190,27 @@ def _drafted_report(tool_use_id: str, topic: str) -> str:
     from its start on resume, and drafting is the kind of work that must
     not run twice — a redraft (timestamped here to make that visible)
     would silently publish something other than what the human approved.
-    The tool use id is the same on both passes, and the cache outlives
-    neither more nor less than the interrupt state it pairs with: both
-    live in this process.
+    The tool use id is the same on both passes, and the drafts live in the
+    agent's state, which is held and restored with the interrupt state it
+    pairs with.
 
     Args:
+        agent (Agent): The agent running the tool.
         tool_use_id (str): The id of the tool call being drafted for.
         topic (str): The report topic.
 
     Returns:
         str: The draft report body.
     """
-    if tool_use_id not in _drafts:
+    drafts = agent.state.get("drafts") or {}
+    if tool_use_id not in drafts:
         drafted_at = datetime.now(UTC).isoformat()
-        _drafts[tool_use_id] = (
+        drafts[tool_use_id] = (
             f"# {topic}\n\nEverything about {topic} is going well.\n\n"
             f"_Drafted at {drafted_at}._\n"
         )
-    return _drafts[tool_use_id]
+        agent.state.set("drafts", drafts)
+    return drafts[tool_use_id]
 
 
 @tool(context=True)
@@ -229,7 +231,7 @@ def sample_draft_report(tool_context: ToolContext, topic: str) -> str | dict:
             block.
     """
     tool_use_id = tool_context.tool_use["toolUseId"]
-    draft = _drafted_report(tool_use_id, topic)
+    draft = _drafted_report(tool_context.agent, tool_use_id, topic)
     answer = tool_context.interrupt(
         "example-draft-report-approval",
         reason=interrupt_reason(
@@ -241,7 +243,9 @@ def sample_draft_report(tool_context: ToolContext, topic: str) -> str | dict:
             input={"label": "Or type your answer"},
         ),
     )
-    del _drafts[tool_use_id]
+    drafts = tool_context.agent.state.get("drafts") or {}
+    del drafts[tool_use_id]
+    tool_context.agent.state.set("drafts", drafts)
     if answer == "Publish":
         name = _document_name("report")
         return {
@@ -320,13 +324,41 @@ async def approve_image_generation(
 _FILES_FROM = {"generate_image", "create_sample_file", "sample_draft_report"}
 
 
-# The Agents whose runs stopped for human input, under the ids of the
-# interrupts they raised. Welt sends those ids back when the buttons are
-# answered, and the run they belong to is the one that can be resumed. An
-# entry lives as long as this process: AgentCore Runtime gives each session
-# its own microVM, so a resume that arrives after it was recycled finds
-# nothing and raises, which Welt renders as its resume-failure notice.
-_interrupted: dict[str, Agent] = {}
+# The runs that stopped for human input are kept in this bucket, one object
+# per interrupt they raised, under `interrupted/<interrupt id>.json`. Welt
+# sends those ids back when the buttons are answered, and the answers may
+# arrive at another process than the one that stopped: AgentCore Runtime
+# recycles a session's microVM, and Lambda keeps no request on the
+# environment of the one before it. A lifecycle rule on the prefix clears
+# the runs nobody answered. The calls are boto3's, which block, so they run
+# on a thread: one process serves several requests on its event loop.
+_bucket = os.environ["SESSION_BUCKET"]
+_s3 = boto3.client("s3")
+
+
+def _held_key(interrupt_id: str) -> str:
+    return f"interrupted/{interrupt_id}.json"
+
+
+def _hold(agent: Agent, interrupt_ids: list[str]) -> None:
+    """
+    Keep a stopped run until its interrupts are answered.
+
+    The snapshot carries the run's messages, its state and where it
+    stopped; the tools and the model are this file's, and are built again
+    on resume. Every id of the stop gets the same snapshot, since the
+    answers name any of them.
+
+    Args:
+        agent (Agent): The run that stopped.
+        interrupt_ids (list[str]): The ids of the interrupts it raised.
+    """
+    snapshot = agent.take_snapshot(
+        preset="session", app_data={"interrupt_ids": interrupt_ids}
+    )
+    body = json.dumps(snapshot.to_dict())
+    for interrupt_id in interrupt_ids:
+        _s3.put_object(Bucket=_bucket, Key=_held_key(interrupt_id), Body=body)
 
 
 def _resumed(answers: Mapping[str, object]) -> Agent:
@@ -334,9 +366,9 @@ def _resumed(answers: Mapping[str, object]) -> Agent:
     Take the held run the answered interrupts belong to.
 
     A stop's questions are answered together, so every id in one payload
-    names the same run — and the whole stop leaves the map with that run,
-    so every id holding it is dropped here. An answered id no longer held
-    means this process lost the run, and there is nothing to resume.
+    names the same run, and the whole stop is dropped here. An answered id
+    no longer held means the run was answered already or cleared, and
+    there is nothing to resume.
 
     Args:
         answers (Mapping[str, object]): Welt's `interrupt_responses`,
@@ -348,13 +380,18 @@ def _resumed(answers: Mapping[str, object]) -> Agent:
     Raises:
         RuntimeError: If no answered id is held.
     """
-    held_id = next((i for i in answers if i in _interrupted), None)
-    if held_id is None:
-        raise RuntimeError("No interrupted agent to resume in this session.")
-    agent = _interrupted[held_id]
-    for interrupt_id in [i for i, held in _interrupted.items() if held is agent]:
-        del _interrupted[interrupt_id]
-    return agent
+    for interrupt_id in answers:
+        try:
+            held = _s3.get_object(Bucket=_bucket, Key=_held_key(interrupt_id))
+        except _s3.exceptions.NoSuchKey:
+            continue
+        snapshot = Snapshot.from_dict(json.loads(held["Body"].read()))
+        agent = new_agent()
+        agent.load_snapshot(snapshot)
+        for stopped_id in snapshot.app_data["interrupt_ids"]:
+            _s3.delete_object(Bucket=_bucket, Key=_held_key(stopped_id))
+        return agent
+    raise RuntimeError("No interrupted agent to resume in this session.")
 
 
 def new_agent() -> Agent:
@@ -392,20 +429,22 @@ async def invoke(payload: dict) -> AsyncIterator[dict]:
         dict: The events Welt renders.
 
     Raises:
-        RuntimeError: If the answers name no interrupted run this process
-            still holds.
+        RuntimeError: If the answers name no interrupted run still held.
     """
     if "interrupt_responses" in payload:
-        agent = _resumed(payload["interrupt_responses"])
+        agent = await asyncio.to_thread(_resumed, payload["interrupt_responses"])
     else:
         agent = new_agent()
 
     stream = start_reply(agent, payload)
+    interrupt_ids: list[str] = []
     async for event in renderable_events(stream, agent=agent, files_from=_FILES_FROM):
         interrupt = event.get("interrupt")
         if interrupt is not None:
-            _interrupted[interrupt["id"]] = agent
+            interrupt_ids.append(interrupt["id"])
         yield event
+    if interrupt_ids:
+        await asyncio.to_thread(_hold, agent, interrupt_ids)
 
 
 if __name__ == "__main__":

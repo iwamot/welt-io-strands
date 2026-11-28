@@ -8,7 +8,7 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = "MIT"
 authors = [{ name = "Takashi Iwamoto" }]
-keywords = ["welt", "slack", "agentcore", "bedrock", "strands"]
+keywords = ["welt", "slack", "agentcore", "lambda", "bedrock", "strands"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
